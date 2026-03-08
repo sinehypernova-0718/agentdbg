@@ -64,6 +64,20 @@ h1 { font-size: 1.25rem; margin: 0 0 1rem 0; color: var(--accent); }
 .run-item.selected { background: var(--border); border-color: var(--accent); }
 .run-item .run-name { font-weight: 600; }
 .run-item .run-meta { font-size: 0.75rem; color: var(--muted); }
+.run-item.running .live-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 0.35rem;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+  animation: live-dot-pulse 1.5s ease-in-out infinite;
+}
+@keyframes live-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
 .main {
   flex: 1;
   display: flex;

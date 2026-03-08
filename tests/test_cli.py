@@ -203,3 +203,33 @@ def test_view_opens_browser_only_after_wait_succeeds(monkeypatch, empty_data_dir
     result = runner.invoke(app, ["view"])
     assert result.exit_code == 0
     assert call_log == ["wait", "browser"]
+
+
+def test_view_server_stays_running_until_interrupt(monkeypatch, empty_data_dir):
+    """View command blocks until server exits; server runs until fake uvicorn returns (simulates Ctrl+C)."""
+    block_event = threading.Event()
+
+    def fake_uvicorn_run(**kwargs):
+        block_event.wait(timeout=3)
+
+    monkeypatch.setattr("agentdbg.cli._wait_for_port", lambda *a, **kw: True)
+    monkeypatch.setattr("agentdbg.cli.webbrowser.open", lambda *a, **kw: None)
+    monkeypatch.setattr("uvicorn.run", fake_uvicorn_run)
+
+    view_result = {"done": False, "exit_code": None}
+
+    def run_view():
+        r = runner.invoke(app, ["view", "--no-browser", "--port", "9199"])
+        view_result["done"] = True
+        view_result["exit_code"] = r.exit_code
+
+    view_thread = threading.Thread(target=run_view)
+    view_thread.start()
+    time.sleep(0.4)
+    assert view_thread.is_alive(), (
+        "view should still be running (blocked on server join)"
+    )
+    block_event.set()
+    view_thread.join(timeout=5)
+    assert view_result["done"]
+    assert view_result["exit_code"] == 0

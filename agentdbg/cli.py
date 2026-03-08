@@ -192,12 +192,13 @@ def view_cmd(
         fastapi_app = create_app()
         log_level = "warning" if json_out else "info"
 
-        # Start the server in a daemon thread so we can gate the browser
+        # Start the server in a background thread so we can gate the browser
         # open on actual TCP readiness (prevents "connection refused" race).
+        # Server runs until the user presses Ctrl+C (main thread blocks on join).
         server_thread = threading.Thread(
             target=uvicorn.run,
             kwargs=dict(app=fastapi_app, host=host, port=port, log_level=log_level),
-            daemon=True,
+            daemon=False,
         )
         server_thread.start()
 

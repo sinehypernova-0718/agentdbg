@@ -20,11 +20,25 @@ let lastRuns = [];
 let currentRunId = null;
 let currentRunMeta = null;
 let fetchAbort = null;
+let runListPollIntervalId = null;
+let eventPollIntervalId = null;
 const escapeDiv = document.createElement('div');
 
 // Filter value in URL vs internal event_type. Default All; URL persists so refresh keeps it.
 const FILTER_URL_MAP = { all: 'all', llm: 'LLM_CALL', tools: 'TOOL_CALL', errors: 'ERROR', state: 'STATE_UPDATE', loops: 'LOOP_WARNING' };
 const FILTER_LABELS = { all: 'All', LLM_CALL: 'LLM', TOOL_CALL: 'Tools', ERROR: 'Errors', STATE_UPDATE: 'State', LOOP_WARNING: 'Loops' };
+
+/** Poll intervals in ms. Read from URL ?poll_runs=5&poll_events=3 (seconds); defaults 3s and 2s; clamped 1–60s. */
+function getPollIntervalSeconds(name, defaultSec) {
+  const url = new URL(window.location.href);
+  const v = url.searchParams.get(name);
+  if (v == null || v === '') return defaultSec;
+  const n = parseInt(v, 10);
+  if (Number.isNaN(n)) return defaultSec;
+  return Math.max(1, Math.min(60, n));
+}
+const POLL_RUNS_MS = getPollIntervalSeconds('poll_runs', 3) * 1000;
+const POLL_EVENTS_MS = getPollIntervalSeconds('poll_events', 2) * 1000;
 
 function getRunIdFromUrl() {
   const url = new URL(window.location.href);
@@ -159,14 +173,7 @@ async function loadRuns() {
     } else {
       const frag = document.createDocumentFragment();
       runs.forEach((run) => {
-        const div = document.createElement('div');
-        div.className = 'run-item';
-        div.dataset.runId = run.run_id;
-        const name = run.run_name || run.run_id?.slice(0, 8) || '—';
-        const meta = [run.started_at || '', run.status || '', run.duration_ms != null ? run.duration_ms + ' ms' : ''].filter(Boolean).join(' · ');
-        div.innerHTML = '<span class="run-name">' + escapeHtml(name) + '</span><br><span class="run-meta">' + escapeHtml(meta) + '</span>';
-        div.addEventListener('click', () => selectRun(run.run_id));
-        frag.appendChild(div);
+        frag.appendChild(buildRunItemEl(run));
       });
       runListEl.appendChild(frag);
       const urlRunId = getRunIdFromUrl();
@@ -190,6 +197,7 @@ async function loadRuns() {
   } finally {
     setRunListLoading(false);
     updateCopyButtonsState();
+    if (document.visibilityState === 'visible') startRunListPolling();
   }
 }
 
@@ -199,10 +207,24 @@ function escapeHtml(s) {
   return escapeDiv.innerHTML;
 }
 
+/** Build one sidebar run item element (shared by loadRuns and mergeRunListIntoSidebar). */
+function buildRunItemEl(run) {
+  const div = document.createElement('div');
+  div.className = 'run-item' + (run.status === 'running' ? ' running' : '');
+  div.dataset.runId = run.run_id;
+  const name = run.run_name || run.run_id?.slice(0, 8) || '—';
+  const meta = [run.started_at || '', run.status || '', run.duration_ms != null ? run.duration_ms + ' ms' : ''].filter(Boolean).join(' · ');
+  const nameHtml = run.status === 'running' ? '<span class="live-dot" aria-hidden="true"></span><span class="run-name">' + escapeHtml(name) + '</span>' : '<span class="run-name">' + escapeHtml(name) + '</span>';
+  div.innerHTML = nameHtml + '<br><span class="run-meta">' + escapeHtml(meta) + '</span>';
+  div.addEventListener('click', () => selectRun(run.run_id));
+  return div;
+}
+
 function selectRun(runId, options) {
   const opts = options || {};
   if (runId === currentRunId && !opts.fromPopState && !opts.forceRefresh) return;
   currentRunId = runId;
+  clearEventPollInterval();
   if (fetchAbort) {
     fetchAbort.abort();
     fetchAbort = null;
@@ -390,6 +412,7 @@ async function loadRunMeta(runId, signal) {
     if (signal?.aborted) return;
     currentRunMeta = run;
     renderRunSummary(run, currentEvents.length ? currentEvents : null);
+    if (run.status === 'running' && document.visibilityState === 'visible') startEventPolling();
   } catch (e) {
     if (e.name === 'AbortError') return;
     runSummaryEl.style.display = 'none';
@@ -499,6 +522,7 @@ async function loadEvents(runId, signal) {
     }
     renderToolbar(events);
     renderEvents();
+    if (currentRunMeta?.status === 'running' && document.visibilityState === 'visible') startEventPolling();
   } catch (e) {
     if (e.name === 'AbortError') return;
     currentEvents = [];
@@ -506,6 +530,156 @@ async function loadEvents(runId, signal) {
     showTimelineError(e.message || 'Failed to load events');
   }
 }
+
+// --- Live refresh: run list poll (3s), event poll (2s when run is running), visibility gating ---
+
+function clearRunListPollInterval() {
+  if (runListPollIntervalId != null) {
+    clearInterval(runListPollIntervalId);
+    runListPollIntervalId = null;
+  }
+}
+
+function clearEventPollInterval() {
+  if (eventPollIntervalId != null) {
+    clearInterval(eventPollIntervalId);
+    eventPollIntervalId = null;
+  }
+}
+
+function startRunListPolling() {
+  if (document.visibilityState !== 'visible') return;
+  clearRunListPollInterval();
+  runListPollIntervalId = setInterval(pollRunList, POLL_RUNS_MS);
+}
+
+function startEventPolling() {
+  if (!currentRunId || currentRunMeta?.status !== 'running' || document.visibilityState !== 'visible') return;
+  clearEventPollInterval();
+  eventPollIntervalId = setInterval(pollEventsForCurrentRun, POLL_EVENTS_MS);
+}
+
+/** Merge API runs into sidebar: add new run items, update existing meta and running state. Does not replace list or change selection. */
+function mergeRunListIntoSidebar(runs) {
+  if (!runs || runs.length === 0) return;
+  for (let i = 0; i < runs.length; i++) {
+    const run = runs[i];
+    const existing = runListEl.querySelector('.run-item[data-run-id="' + run.run_id + '"]');
+    const name = run.run_name || run.run_id?.slice(0, 8) || '—';
+    const meta = [run.started_at || '', run.status || '', run.duration_ms != null ? run.duration_ms + ' ms' : ''].filter(Boolean).join(' · ');
+    if (existing) {
+      const nameEl = existing.querySelector('.run-name');
+      const metaEl = existing.querySelector('.run-meta');
+      if (nameEl) nameEl.textContent = name;
+      if (metaEl) metaEl.textContent = meta;
+      existing.classList.toggle('running', run.status === 'running');
+      let dot = existing.querySelector('.live-dot');
+      if (run.status === 'running') {
+        if (!dot) {
+          dot = document.createElement('span');
+          dot.className = 'live-dot';
+          dot.setAttribute('aria-hidden', 'true');
+          existing.insertBefore(dot, existing.firstChild);
+        }
+      } else {
+        dot?.remove();
+      }
+    } else {
+      const newEl = buildRunItemEl(run);
+      const prevRun = runs[i - 1];
+      const prevEl = prevRun ? runListEl.querySelector('.run-item[data-run-id="' + prevRun.run_id + '"]') : null;
+      runListEl.insertBefore(newEl, prevEl ? prevEl.nextSibling : runListEl.firstChild);
+    }
+  }
+}
+
+async function pollRunList() {
+  if (runListEl.querySelector('.run-list-loading')) return;
+  try {
+    const r = await fetch('/api/runs');
+    if (!r.ok) return;
+    const data = await r.json();
+    const runs = data.runs || [];
+    mergeRunListIntoSidebar(runs);
+    const runIds = new Set(runs.map((x) => x.run_id));
+    const items = Array.from(runListEl.querySelectorAll('.run-item'));
+    let currentRunWasRemoved = false;
+    for (const el of items) {
+      if (!runIds.has(el.dataset.runId)) {
+        if (el.dataset.runId === currentRunId) currentRunWasRemoved = true;
+        el.remove();
+      }
+    }
+    if (runs.length === 0) {
+      runListEl.innerHTML = '<div class="empty">No runs yet.</div>';
+    }
+    lastRuns = runs;
+    if (currentRunWasRemoved) {
+      clearEventPollInterval();
+      currentRunId = null;
+      currentRunMeta = null;
+      if (runSummaryEl) runSummaryEl.style.display = 'none';
+      timelineEmptyEl.textContent = 'Select a run to view events.';
+      timelineEmptyEl.style.display = 'block';
+      timelineEventsEl.innerHTML = '';
+      timelineToolbarEl.style.display = 'none';
+      timelineErrorEl.style.display = 'none';
+      hideRunNotFoundBanner();
+      updateCopyButtonsState();
+      if (runs.length > 0) selectRun(runs[0].run_id, { fromFallback: true });
+    } else {
+      const cur = runs.find((x) => x.run_id === currentRunId);
+      if (cur) currentRunMeta = cur;
+      if (currentRunMeta && currentRunMeta.status !== 'running') clearEventPollInterval();
+      else if (currentRunMeta && currentRunMeta.status === 'running' && document.visibilityState === 'visible') startEventPolling();
+    }
+  } catch (_) {}
+}
+
+async function pollEventsForCurrentRun() {
+  if (!currentRunId || currentRunMeta?.status !== 'running') return;
+  const ac = new AbortController();
+  const signal = ac.signal;
+  try {
+    const [metaRes, eventsRes] = await Promise.all([
+      fetch('/api/runs/' + encodeURIComponent(currentRunId), { signal }),
+      fetch('/api/runs/' + encodeURIComponent(currentRunId) + '/events', { signal }),
+    ]);
+    if (signal?.aborted) return;
+    if (!metaRes.ok || !eventsRes.ok) return;
+    const run = await metaRes.json();
+    const eventsData = await eventsRes.json();
+    if (signal?.aborted) return;
+    if (currentRunId !== (run.run_id || currentRunId)) return;
+    currentRunMeta = run;
+    currentEvents = eventsData.events || [];
+    renderRunSummary(currentRunMeta, currentEvents);
+    if (currentEvents.length === 0) {
+      timelineEmptyEl.textContent = 'No events for this run.';
+      timelineEmptyEl.style.display = 'block';
+      timelineEventsEl.innerHTML = '';
+      timelineToolbarEl.style.display = 'none';
+    } else {
+      timelineEmptyEl.style.display = 'none';
+      renderToolbar(currentEvents);
+      renderEvents();
+    }
+    if (currentRunMeta.status !== 'running') clearEventPollInterval();
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+  }
+}
+
+window.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    clearRunListPollInterval();
+    clearEventPollInterval();
+  } else {
+    startRunListPolling();
+    pollRunList();
+    if (currentRunMeta?.status === 'running') startEventPolling();
+  }
+});
 
 window.addEventListener('popstate', () => {
   currentFilter = getFilterFromUrl();
