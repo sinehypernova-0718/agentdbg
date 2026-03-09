@@ -38,6 +38,8 @@ MAY_BREAK_ROUTING = [
 ENDPOINTS = [
     "/api/runs/{rid}",
     "/api/runs/{rid}/events",
+    "/api/runs/{rid}/paths",
+    "/api/runs/{rid}/rename",
 ]
 
 

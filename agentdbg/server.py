@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 import agentdbg.storage as storage
 from agentdbg.config import AgentDbgConfig, load_config
@@ -31,6 +32,9 @@ def create_app() -> FastAPI:
     """Create and return the FastAPI application for the local viewer."""
     app = FastAPI(title="AgentDbg Viewer")
     app.state.config = load_config()
+
+    class RenameRunRequest(BaseModel):
+        run_name: str
 
     @app.get("/api/runs")
     def get_runs(config: AgentDbgConfig = Depends(_get_config)) -> dict:
@@ -70,6 +74,65 @@ def create_app() -> FastAPI:
             "run_id": run_id,
             "events": events,
         }
+
+    @app.get("/api/runs/{run_id}/paths")
+    def get_run_paths(
+        run_id: str, config: AgentDbgConfig = Depends(_get_config)
+    ) -> dict:
+        """Return local filesystem paths for the run (run_dir, run_json, events_jsonl)."""
+        try:
+            paths = storage.get_run_paths(run_id, config)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid run_id")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="run not found")
+        return {"spec_version": SPEC_VERSION, "run_id": run_id, "paths": paths}
+
+    @app.get("/api/runs/{run_id}/rename")
+    def validate_run_for_rename(
+        run_id: str, config: AgentDbgConfig = Depends(_get_config)
+    ) -> dict:
+        """
+        Validate run_id and return metadata.
+
+        Primarily exists so path-traversal tests can exercise the validator on this
+        endpoint with GET, matching /api/runs/{run_id}.
+        """
+        try:
+            return storage.load_run_meta(run_id, config)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid run_id")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="run not found")
+
+    @app.post("/api/runs/{run_id}/rename")
+    def rename_run(
+        run_id: str,
+        payload: RenameRunRequest,
+        config: AgentDbgConfig = Depends(_get_config),
+    ) -> dict:
+        """Rename a run by updating its run.json run_name field."""
+        try:
+            return storage.rename_run(run_id, payload.run_name, config)
+        except ValueError as e:
+            msg = str(e)
+            detail = "invalid run_id" if "invalid run_id" in msg else msg
+            raise HTTPException(status_code=400, detail=detail)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="run not found")
+
+    @app.delete("/api/runs/{run_id}")
+    def delete_run(
+        run_id: str, config: AgentDbgConfig = Depends(_get_config)
+    ) -> Response:
+        """Delete a run directory and its contents."""
+        try:
+            storage.delete_run(run_id, config)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid run_id")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="run not found")
+        return Response(status_code=204)
 
     @app.get("/favicon.svg")
     def serve_favicon() -> FileResponse:

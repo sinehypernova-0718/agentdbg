@@ -98,3 +98,97 @@ def test_server_returns_200_for_valid_run_id(temp_data_dir):
     r = client.get(f"/api/runs/{run_id}")
     assert r.status_code == 200
     assert r.json().get("run_id") == run_id
+
+
+def test_server_paths_endpoint_returns_run_json_path(temp_data_dir):
+    """GET /api/runs/{run_id}/paths returns local run.json path."""
+    config = load_config()
+    meta = storage.create_run(run_name="paths_test", config=config)
+    run_id = meta["run_id"]
+    client = TestClient(create_app())
+
+    r = client.get(f"/api/runs/{run_id}/paths")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data.get("run_id") == run_id
+    paths = data.get("paths") or {}
+    assert paths.get("run_json") == meta["paths"]["run_json"]
+
+
+def test_server_paths_endpoint_invalid_and_missing_run_id(temp_data_dir):
+    """Paths endpoint mirrors run meta semantics for invalid/missing IDs."""
+    client = TestClient(create_app())
+
+    r = client.get("/api/runs/not-a-uuid/paths")
+    assert r.status_code == 400
+    assert "invalid run_id" in (r.json().get("detail") or "")
+
+    r2 = client.get("/api/runs/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11/paths")
+    assert r2.status_code == 404
+    assert "run not found" in (r2.json().get("detail") or "")
+
+
+def test_server_can_rename_run(temp_data_dir):
+    """POST /api/runs/{run_id}/rename updates run.json run_name on disk."""
+    config = load_config()
+    meta = storage.create_run(run_name="before", config=config)
+    run_id = meta["run_id"]
+    client = TestClient(create_app())
+
+    r = client.post(f"/api/runs/{run_id}/rename", json={"run_name": "after"})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data.get("run_id") == run_id
+    assert data.get("run_name") == "after"
+
+    # Disk contents updated
+    reloaded = storage.load_run_meta(run_id, config)
+    assert reloaded["run_name"] == "after"
+
+
+def test_server_rename_invalid_and_missing_run_id(temp_data_dir):
+    """Rename endpoint validates run_id and missing runs."""
+    client = TestClient(create_app())
+
+    r = client.post("/api/runs/not-a-uuid/rename", json={"run_name": "x"})
+    assert r.status_code == 400
+    assert "invalid run_id" in (r.json().get("detail") or "")
+
+    r2 = client.post(
+        "/api/runs/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11/rename",
+        json={"run_name": "x"},
+    )
+    assert r2.status_code == 404
+    assert "run not found" in (r2.json().get("detail") or "")
+
+
+def test_server_can_delete_run(temp_data_dir):
+    """DELETE /api/runs/{run_id} removes the run directory."""
+    config = load_config()
+    meta = storage.create_run(run_name="to_delete", config=config)
+    run_id = meta["run_id"]
+    run_dir = meta["paths"]["run_dir"]
+    assert run_dir, "create_run should return run_dir path"
+
+    client = TestClient(create_app())
+
+    r = client.delete(f"/api/runs/{run_id}")
+    assert r.status_code == 204, r.text
+
+    # Run directory should be gone
+    from pathlib import Path
+
+    assert not Path(run_dir).exists()
+
+
+def test_server_delete_invalid_and_missing_run_id(temp_data_dir):
+    """DELETE endpoint validates run_id and missing runs."""
+    client = TestClient(create_app())
+
+    r = client.delete("/api/runs/not-a-uuid")
+    assert r.status_code == 400
+    assert "invalid run_id" in (r.json().get("detail") or "")
+
+    r2 = client.delete("/api/runs/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11")
+    assert r2.status_code == 404
+    assert "run not found" in (r2.json().get("detail") or "")

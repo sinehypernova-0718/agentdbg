@@ -8,6 +8,7 @@ Uses config.data_dir (default ~/.agentdbg). Stdlib only.
 import json
 import logging
 import os
+import shutil
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -334,3 +335,55 @@ def load_events(run_id: str, config: AgentDbgConfig) -> list[dict]:
                 )
                 continue
     return events
+
+
+def get_run_paths(run_id: str, config: AgentDbgConfig) -> dict:
+    """
+    Return local filesystem paths for a run.
+
+    Used by the viewer UI to expose "Copy path" for run.json without
+    changing the on-disk run.json schema.
+    """
+    run_dir = _run_dir(run_id, config)
+    run_json = run_dir / RUN_JSON
+    events_jsonl = run_dir / EVENTS_JSONL
+    if not run_json.is_file():
+        raise FileNotFoundError(f"No run found for run_id '{run_id}'")
+    return {
+        "run_dir": str(run_dir),
+        "run_json": str(run_json),
+        "events_jsonl": str(events_jsonl),
+    }
+
+
+def rename_run(run_id: str, run_name: str, config: AgentDbgConfig) -> dict:
+    """
+    Update run.json run_name and return updated metadata.
+
+    Does not touch events.jsonl or any other fields.
+    """
+    path = _run_json_path(run_id, config)
+    if not path.is_file():
+        raise FileNotFoundError(f"No run found for run_id '{run_id}'")
+
+    new_name = (run_name or "").strip()
+    if not new_name:
+        raise ValueError("run_name must be non-empty")
+
+    with open(path, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+    meta["run_name"] = new_name
+    _atomic_write_json(path, meta)
+    return meta
+
+
+def delete_run(run_id: str, config: AgentDbgConfig) -> None:
+    """
+    Delete a run directory and all its contents.
+
+    Caller is responsible for ensuring the run is no longer needed.
+    """
+    run_dir = _run_dir(run_id, config)
+    if not run_dir.is_dir():
+        raise FileNotFoundError(f"No run found for run_id '{run_id}'")
+    shutil.rmtree(run_dir)

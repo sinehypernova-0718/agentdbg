@@ -3,6 +3,9 @@ const runListErrorEl = document.getElementById('run-list-error');
 const btnRefreshEl = document.getElementById('btn-refresh');
 const btnCopyLinkEl = document.getElementById('btn-copy-link');
 const btnCopyRunIdEl = document.getElementById('btn-copy-run-id');
+const btnCopyPathEl = document.getElementById('btn-copy-path');
+const btnRenameRunEl = document.getElementById('btn-rename-run');
+const btnDeleteRunEl = document.getElementById('btn-delete-run');
 const runSummaryEl = document.getElementById('run-summary');
 const runSummaryStatusEl = document.getElementById('run-summary-status');
 const runSummaryKpisEl = document.getElementById('run-summary-kpis');
@@ -105,6 +108,9 @@ function updateCopyButtonsState() {
   const hasRun = !!currentRunId;
   if (btnCopyLinkEl) btnCopyLinkEl.disabled = !hasRun;
   if (btnCopyRunIdEl) btnCopyRunIdEl.disabled = !hasRun;
+  if (btnCopyPathEl) btnCopyPathEl.disabled = !hasRun;
+  if (btnRenameRunEl) btnRenameRunEl.disabled = !hasRun;
+  if (btnDeleteRunEl) btnDeleteRunEl.disabled = !hasRun;
 }
 
 async function copyRunLink() {
@@ -124,6 +130,85 @@ async function copyRunId() {
     if (btnCopyRunIdEl) btnCopyRunIdEl.textContent = 'Copied!';
     setTimeout(() => { if (btnCopyRunIdEl) btnCopyRunIdEl.textContent = 'Copy run ID'; }, 1500);
   } catch (_) {}
+}
+
+async function copyRunPath() {
+  if (!currentRunId) return;
+  try {
+    const r = await fetch('/api/runs/' + encodeURIComponent(currentRunId) + '/paths');
+    if (!r.ok) throw new Error(r.statusText || 'Failed to load paths');
+    const data = await r.json();
+    const paths = data.paths || {};
+    // const runJsonPath = paths.run_json;
+    // if (!runJsonPath) throw new Error('run.json path unavailable');
+    // await navigator.clipboard.writeText(runJsonPath);
+    const runDirPath = paths.run_dir;
+    if (!runDirPath) throw new Error('run directory path unavailable');
+    await navigator.clipboard.writeText(runDirPath);
+    if (btnCopyPathEl) btnCopyPathEl.textContent = 'Copied!';
+    setTimeout(() => { if (btnCopyPathEl) btnCopyPathEl.textContent = 'Copy path'; }, 1500);
+  } catch (_) {}
+}
+
+async function renameRun() {
+  if (!currentRunId) return;
+  const currentName = currentRunMeta?.run_name || '';
+  const msg =
+    'Enter a new name for this run. This will update its run.json file on disk.';
+  const nextName = window.prompt(msg, currentName);
+  if (nextName == null) return;
+  const trimmed = nextName.trim();
+  if (!trimmed || trimmed === currentName) return;
+
+  try {
+    const r = await fetch('/api/runs/' + encodeURIComponent(currentRunId) + '/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_name: trimmed }),
+    });
+    if (!r.ok) {
+      throw new Error(r.statusText || 'Failed to rename run');
+    }
+    const meta = await r.json();
+    currentRunMeta = meta;
+    renderRunSummary(currentRunMeta, currentEvents.length ? currentEvents : null);
+    // Refresh sidebar metadata so the name updates there as well.
+    pollRunList();
+  } catch (e) {
+    window.alert(e.message || 'Failed to rename run');
+  }
+}
+
+async function deleteRun() {
+  if (!currentRunId) return;
+  const ok = window.confirm(
+    'Delete this run permanently?\n\nThis will remove its directory and run.json file from local storage. This action cannot be undone.',
+  );
+  if (!ok) return;
+
+  const runIdToDelete = currentRunId;
+  try {
+    if (btnDeleteRunEl) btnDeleteRunEl.disabled = true;
+    const r = await fetch('/api/runs/' + encodeURIComponent(runIdToDelete), {
+      method: 'DELETE',
+    });
+    if (!r.ok && r.status !== 404) {
+      throw new Error(r.statusText || 'Failed to delete run');
+    }
+
+    // Clear run from URL so reload doesn't try to re-select a deleted ID.
+    const url = new URL(window.location.href);
+    url.searchParams.delete('run');
+    url.searchParams.delete('run_id');
+    window.history.replaceState({ run_id: null, filter: currentFilter }, '', url.toString());
+
+    // Reload run list; selection/fallback handled by loadRuns().
+    await loadRuns();
+  } catch (e) {
+    window.alert(e.message || 'Failed to delete run');
+  } finally {
+    if (btnDeleteRunEl) btnDeleteRunEl.disabled = !currentRunId;
+  }
 }
 
 function showRunListError(msg) {
@@ -695,6 +780,9 @@ window.addEventListener('popstate', () => {
 if (btnRefreshEl) btnRefreshEl.addEventListener('click', () => loadRuns());
 if (btnCopyLinkEl) btnCopyLinkEl.addEventListener('click', copyRunLink);
 if (btnCopyRunIdEl) btnCopyRunIdEl.addEventListener('click', copyRunId);
+if (btnCopyPathEl) btnCopyPathEl.addEventListener('click', copyRunPath);
+if (btnRenameRunEl) btnRenameRunEl.addEventListener('click', renameRun);
+if (btnDeleteRunEl) btnDeleteRunEl.addEventListener('click', deleteRun);
 
 updateCopyButtonsState();
 loadRuns();

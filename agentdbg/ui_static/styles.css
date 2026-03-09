@@ -42,6 +42,13 @@ body {
 }
 .btn-header:hover:not(:disabled) { background: var(--border); }
 .btn-header:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-header-danger {
+  border-color: var(--error-border);
+  color: #ff8888;
+}
+.btn-header-danger:hover:not(:disabled) {
+  background: var(--error-bg);
+}
 h1 { font-size: 1.25rem; margin: 0 0 1rem 0; color: var(--accent); }
 .layout { display: flex; gap: 1rem; min-height: 80vh; }
 .sidebar {
