@@ -50,6 +50,9 @@ uv run --extra langchain python examples/langchain/minimal.py
 agentdbg view
 ```
 
+**Guardrails (e.g. `stop_on_loop`) with LangChain / LangGraph:**
+All guardrails work with the callback handler. When a guardrail fires, the handler sets `raise_error = True` and re-raises the exception, which tells LangChain to propagate it instead of swallowing it. This stops the graph mid-execution. See [Guardrails](guardrails.md) for details.
+
 **Notes:**
 
 - The handler requires an active AgentDbg run - wrap your entrypoint with `@trace` or set `AGENTDBG_IMPLICIT_RUN=1`.
@@ -94,6 +97,20 @@ See `examples/openai_agents/minimal.py` for a runnable fake-data example:
 ```bash
 uv run --extra openai python examples/openai_agents/minimal.py
 agentdbg view
+```
+
+**Guardrails with OpenAI Agents SDK:**
+The SDK wraps all tracing processor calls in `try/except` and logs errors, so guardrail exceptions cannot propagate to stop the run. When a guardrail fires, the exception is stored on `PROCESSOR.abort_exception`. Call `PROCESSOR.raise_if_aborted()` after `Runner.run()` to re-raise it:
+
+```python
+from agentdbg import trace, AgentDbgLoopAbort
+from agentdbg.integrations.openai_agents import PROCESSOR
+
+@trace(stop_on_loop=True)
+async def run_agent():
+    result = await Runner.run(agent, input)
+    PROCESSOR.raise_if_aborted()
+    return result
 ```
 
 **Notes:**

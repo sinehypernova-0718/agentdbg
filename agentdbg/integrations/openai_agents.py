@@ -21,6 +21,7 @@ generation, function, and handoff spans into AgentDbg `record_*` calls.
 from typing import Any
 
 from agentdbg import has_active_run, record_llm_call, record_tool_call
+from agentdbg.exceptions import AgentDbgGuardrailExceeded
 from agentdbg.integrations._error import MissingOptionalDependencyError
 
 try:
@@ -91,10 +92,29 @@ def _base_meta(span: Any, span_type: str) -> dict[str, Any]:
 
 
 class AgentDbgOpenAIAgentsTracingProcessor(TracingProcessor):
-    """Translate completed OpenAI Agents spans into AgentDbg recorders."""
+    """Translate completed OpenAI Agents spans into AgentDbg recorders.
+
+    The OpenAI Agents SDK wraps all processor calls in try/except and logs
+    errors, so guardrail exceptions cannot propagate to stop the run.
+    When a guardrail fires, the exception is stored on abort_exception.
+    Call raise_if_aborted() after Runner.run() to re-raise it.
+    """
+
+    def __init__(self) -> None:
+        self._abort_exception: AgentDbgGuardrailExceeded | None = None
+
+    @property
+    def abort_exception(self) -> AgentDbgGuardrailExceeded | None:
+        """The guardrail exception if one fired during the last run, or None."""
+        return self._abort_exception
+
+    def raise_if_aborted(self) -> None:
+        """Re-raise the guardrail exception if one was captured during the last run."""
+        if self._abort_exception is not None:
+            raise self._abort_exception
 
     def on_trace_start(self, trace: Any) -> None:
-        return None
+        self._abort_exception = None
 
     def on_trace_end(self, trace: Any) -> None:
         return None
@@ -111,50 +131,54 @@ class AgentDbgOpenAIAgentsTracingProcessor(TracingProcessor):
         status = _status_from_span_error(span_error)
         error = _span_error_to_agentdbg_error(span_error)
 
-        if isinstance(span_data, GenerationSpanData):
-            meta = _base_meta(span, "generation")
-            if span_data.model_config is not None:
-                meta["openai_agents"]["model_config"] = span_data.model_config
-            record_llm_call(
-                model=span_data.model or "unknown",
-                prompt=span_data.input,
-                response=span_data.output,
-                usage=span_data.usage,
-                meta=meta,
-                provider="openai",
-                status=status,
-                error=error,
-            )
-            return
+        try:
+            if isinstance(span_data, GenerationSpanData):
+                meta = _base_meta(span, "generation")
+                if span_data.model_config is not None:
+                    meta["openai_agents"]["model_config"] = span_data.model_config
+                record_llm_call(
+                    model=span_data.model or "unknown",
+                    prompt=span_data.input,
+                    response=span_data.output,
+                    usage=span_data.usage,
+                    meta=meta,
+                    provider="openai",
+                    status=status,
+                    error=error,
+                )
+                return
 
-        if isinstance(span_data, FunctionSpanData):
-            meta = _base_meta(span, "function")
-            if span_data.mcp_data is not None:
-                meta["openai_agents"]["mcp_data"] = span_data.mcp_data
-            record_tool_call(
-                name=span_data.name or "unknown",
-                args=span_data.input,
-                result=span_data.output,
-                meta=meta,
-                status=status,
-                error=error,
-            )
-            return
+            if isinstance(span_data, FunctionSpanData):
+                meta = _base_meta(span, "function")
+                if span_data.mcp_data is not None:
+                    meta["openai_agents"]["mcp_data"] = span_data.mcp_data
+                record_tool_call(
+                    name=span_data.name or "unknown",
+                    args=span_data.input,
+                    result=span_data.output,
+                    meta=meta,
+                    status=status,
+                    error=error,
+                )
+                return
 
-        if isinstance(span_data, HandoffSpanData):
-            meta = _base_meta(span, "handoff")
-            meta["openai_agents"]["handoff"] = {
-                "from_agent": span_data.from_agent,
-                "to_agent": span_data.to_agent,
-            }
-            record_tool_call(
-                name="handoff",
-                args=None,
-                result=None,
-                meta=meta,
-                status=status,
-                error=error,
-            )
+            if isinstance(span_data, HandoffSpanData):
+                meta = _base_meta(span, "handoff")
+                meta["openai_agents"]["handoff"] = {
+                    "from_agent": span_data.from_agent,
+                    "to_agent": span_data.to_agent,
+                }
+                record_tool_call(
+                    name="handoff",
+                    args=None,
+                    result=None,
+                    meta=meta,
+                    status=status,
+                    error=error,
+                )
+        except AgentDbgGuardrailExceeded as e:
+            self._abort_exception = e
+            raise
 
     def shutdown(self) -> None:
         return None

@@ -3,6 +3,7 @@ Tests for LangChain integration. Skip if langchain is not installed.
 Uses temp dir; no network calls. Asserts TOOL_CALL and LLM_CALL events.
 """
 
+import logging
 import sys
 
 import pytest
@@ -11,6 +12,7 @@ from tests.conftest import get_latest_run_id
 from agentdbg import trace
 from agentdbg.config import load_config
 from agentdbg.events import EventType
+from agentdbg.exceptions import AgentDbgGuardrailExceeded, AgentDbgLoopAbort
 from agentdbg.storage import load_events
 
 try:
@@ -165,3 +167,104 @@ def test_langchain_handler_tool_error_emits_error_status(temp_data_dir):
     )
     assert err.get("error_type") == "ValueError"
     assert "simulated failure" in str(err.get("message", ""))
+
+
+def _simulate_langchain_handle_event(handler, event_name: str, *args, **kwargs) -> None:
+    """Simulate LangChain's handle_event: call the callback, re-raise if raise_error."""
+    try:
+        getattr(handler, event_name)(*args, **kwargs)
+    except Exception:
+        if handler.raise_error:
+            raise
+        logging.warning("Error in callback (swallowed by framework)")
+
+
+@pytest.mark.skipif(LANGCHAIN_MISSING, reason="langchain_core not installed")
+def test_langchain_handler_guardrail_propagates_via_raise_error(temp_data_dir):
+    """stop_on_loop guardrail sets raise_error=True so LangChain propagates the abort."""
+    handler = AgentDbgLangChainCallbackHandler()
+    assert handler.raise_error is False, "raise_error should default to False"
+
+    iterations_completed = 0
+
+    @trace(stop_on_loop=True, stop_on_loop_min_repetitions=3)
+    def _run():
+        nonlocal iterations_completed
+        for i in range(20):
+            _simulate_langchain_handle_event(
+                handler,
+                "on_tool_start",
+                {"name": "search"},
+                '{"q": "pricing"}',
+                run_id=f"tool-{i}",
+            )
+            _simulate_langchain_handle_event(
+                handler,
+                "on_tool_end",
+                "no results",
+                run_id=f"tool-{i}",
+            )
+            _simulate_langchain_handle_event(
+                handler,
+                "on_llm_start",
+                {"id": ["ChatFake"]},
+                ["Try again"],
+                run_id=f"llm-{i}",
+            )
+            _simulate_langchain_handle_event(
+                handler,
+                "on_llm_end",
+                None,
+                run_id=f"llm-{i}",
+            )
+            iterations_completed += 1
+
+    with pytest.raises(AgentDbgLoopAbort):
+        _run()
+
+    assert iterations_completed < 20, (
+        f"guardrail should have stopped the loop early, but completed {iterations_completed}/20"
+    )
+    assert handler.raise_error is True, "raise_error should be True after guardrail"
+    assert handler.abort_exception is not None
+    assert isinstance(handler.abort_exception, AgentDbgGuardrailExceeded)
+
+    config = load_config()
+    run_id = get_latest_run_id(config)
+    events = load_events(run_id, config)
+
+    event_types = [e.get("event_type") for e in events]
+    assert "LOOP_WARNING" in event_types, "trace should contain LOOP_WARNING"
+    assert "ERROR" in event_types, "trace should contain ERROR"
+    assert event_types[-1] == "RUN_END", "last event should be RUN_END"
+    run_end_payload = events[-1].get("payload", {})
+    assert run_end_payload.get("status") == "error"
+
+
+@pytest.mark.skipif(LANGCHAIN_MISSING, reason="langchain_core not installed")
+def test_langchain_handler_resets_raise_error_on_new_run(temp_data_dir):
+    """A reused handler resets raise_error and abort_exception on a new top-level run."""
+    handler = AgentDbgLangChainCallbackHandler()
+    handler.raise_error = True
+    handler._abort_exception = AgentDbgLoopAbort(threshold=3, actual=3, message="old")
+
+    @trace
+    def _run():
+        _simulate_langchain_handle_event(
+            handler,
+            "on_llm_start",
+            {"id": ["ChatFake"]},
+            ["hello"],
+            run_id="new-run-llm-0",
+        )
+        _simulate_langchain_handle_event(
+            handler,
+            "on_llm_end",
+            None,
+            run_id="new-run-llm-0",
+        )
+
+    _run()
+
+    assert handler.raise_error is False, "raise_error should reset on new run"
+    assert handler.abort_exception is None, "abort_exception should reset on new run"

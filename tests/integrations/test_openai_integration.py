@@ -326,3 +326,48 @@ def test_no_run_created_when_only_sdk_span_is_emitted(openai_agents_module):
             tracing_module.emit_span(function_span)
 
     record_tool.assert_not_called()
+
+
+def test_guardrail_exception_captured_on_abort_exception(openai_agents_module):
+    """When a guardrail fires in on_span_end, the exception is stored and re-raised."""
+    openai_agents, tracing_module, span_data = openai_agents_module
+    from agentdbg.exceptions import AgentDbgLoopAbort
+
+    processor = openai_agents.PROCESSOR
+    assert processor.abort_exception is None
+
+    exc = AgentDbgLoopAbort(threshold=3, actual=3, message="stop_on_loop test")
+
+    span = _fake_span(
+        span_data.GenerationSpanData(input="hello", output="world", model="gpt-4o-mini")
+    )
+
+    def fake_record_llm_call(**kwargs):
+        raise exc
+
+    with patch.object(openai_agents, "has_active_run", return_value=True):
+        with patch.object(
+            openai_agents, "record_llm_call", side_effect=fake_record_llm_call
+        ):
+            # The processor re-raises, but a real SDK would catch it.
+            # Simulate the SDK's SynchronousMultiTracingProcessor behavior.
+            try:
+                tracing_module.emit_span(span)
+            except Exception:
+                pass
+
+    assert processor.abort_exception is exc
+    with pytest.raises(AgentDbgLoopAbort):
+        processor.raise_if_aborted()
+
+
+def test_abort_exception_resets_on_new_trace(openai_agents_module):
+    """on_trace_start resets abort_exception so a reused processor is clean."""
+    openai_agents, _, _ = openai_agents_module
+    from agentdbg.exceptions import AgentDbgLoopAbort
+
+    processor = openai_agents.PROCESSOR
+    processor._abort_exception = AgentDbgLoopAbort(threshold=3, actual=3, message="old")
+
+    processor.on_trace_start(SimpleNamespace(trace_id="new_trace"))
+    assert processor.abort_exception is None
