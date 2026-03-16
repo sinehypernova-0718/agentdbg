@@ -2,7 +2,7 @@
 name = "agentdbg"
 dynamic = ["version"]
 description = "Local-first debugger for AI agents (traces, timeline UI, loop warnings)."
-readme = "README.md"
+readme = { file = "README.md", content-type = "text/markdown" }
 license = "Apache-2.0"
 license-files = [ "LICENSE" ]
 authors = [
@@ -81,6 +81,9 @@ format-jinja = """
 
 [tool.hatch.build.hooks.version]
 path = "agentdbg/_version.py"
-template = """
+template = '''
 # This file is managed by dynamic versioning. Do not edit manually.
-version = "{version}""""
+version = "{version}"'''
+
+[tool.hatch.build.hooks.custom]
+path = "scripts/hatch_hooks/readme_links_rewrite.py"

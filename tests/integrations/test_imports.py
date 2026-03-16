@@ -39,7 +39,6 @@ def test_no_eager_imports(reload_integrations):
 
 @pytest.mark.parametrize("name, dependency", INTEGRATIONS)
 def test_lazy_module_imports(reload_integrations, name, dependency):
-
     if importlib.util.find_spec(dependency) is None:
         pytest.skip(f"{dependency} not installed")
 
