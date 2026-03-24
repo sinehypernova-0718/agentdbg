@@ -319,6 +319,11 @@ See `examples/openai_agents/minimal.py` for a runnable fake-data example with no
 More framework adapters coming soon.
 
 
+## Tutorials
+
+Step-by-step Jupyter notebooks live in a separate repository: [AgentDbg/tutorials](https://github.com/AgentDbg/tutorials). Covers LangChain, OpenAI Agents SDK, and guardrails — all runnable without API keys.
+
+
 ## Development
 
 ```bash
