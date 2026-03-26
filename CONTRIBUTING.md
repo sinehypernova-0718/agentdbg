@@ -33,8 +33,8 @@ uv run pytest
 Run a specific file or test:
 
 ```bash
-uv run pytest agentdbg/tests/test_tracing.py
-uv run pytest agentdbg/tests/test_tracing.py -k "test_trace_creates_run"
+uv run pytest tests/test_tracing.py
+uv run pytest tests/test_tracing.py -k "test_trace_creates_run"
 ```
 
 ---
@@ -45,8 +45,8 @@ uv run pytest agentdbg/tests/test_tracing.py -k "test_trace_creates_run"
 - Format and lint:
 
   ```bash
-  uv run ruff check --config=agentdbg/ruff.toml .
-  uv run ruff format --config=agentdbg/ruff.toml .
+  uv run ruff check .
+  uv run ruff format .
   ```
 
 - **Pre-commit:** If you use pre-commit, install hooks with `uv run pre-commit install`. The project does not require pre-commit for contributions; running ruff before pushing is sufficient.
@@ -105,5 +105,5 @@ When you change behavior that affects the trace format or configuration, update 
 
 - **Setup:** `uv venv && uv sync && uv pip install -e .`
 - **Tests:** `uv run pytest`
-- **Lint/format:** `uv run ruff check --config=agentdbg/ruff.toml .` and `uv run ruff format --config=agentdbg/ruff.toml .`
+- **Lint/format:** `uv run ruff check .` and `uv run ruff format .`
 - **Integrations:** Optional deps, map framework callbacks -> `record_*`, deterministic tests, document in `docs/integrations.md`.
