@@ -13,9 +13,15 @@
 **1. Install:**
 
 ```bash
+pip install agentdbg
+```
+
+Or from source:
+
+```bash
 git clone https://github.com/AgentDbg/AgentDbg.git
-cd AgentDbg
-uv venv && uv sync && uv pip install -e .
+cd AgentDbg/agentdbg
+uv sync
 ```
 
 **2. Run the example agent:**
@@ -56,7 +62,7 @@ After any run, open the timeline with `agentdbg view`.
 | [Guardrails](guardrails.md) | Stop runaway runs with loop, count, and duration limits |
 | [CLI](cli.md) | `list`, `view`, `export` with options and exit codes |
 | [Viewer](viewer.md) | Timeline UI usage, URL params, live refresh, and development |
-| [SDK](sdk.md) | `@trace`, `traced_run`, `record_llm_call`, `record_tool_call`, `record_state` |
+| [SDK](sdk.md) | `@trace`, `traced_run`, `has_active_run`, `record_llm_call`, `record_tool_call`, `record_state` |
 | [Integrations](integrations.md) | LangChain handler, OpenAI Agents adapter, and planned adapters |
 | [Architecture](architecture.md) | Event schema, storage layout, viewer API, loop detection |
 | **Reference** | |

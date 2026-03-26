@@ -4,19 +4,25 @@
 
 Requires Python 3.10+.
 
-**With uv (recommended):**
+**From PyPI (recommended):**
 
 ```bash
-git clone https://github.com/AgentDbg/AgentDbg.git
-cd AgentDbg
-uv venv && uv sync && uv pip install -e .
+pip install agentdbg
 ```
 
-**With pip:**
+**From source with uv:**
 
 ```bash
 git clone https://github.com/AgentDbg/AgentDbg.git
-cd AgentDbg
+cd AgentDbg/agentdbg
+uv sync
+```
+
+**From source with pip:**
+
+```bash
+git clone https://github.com/AgentDbg/AgentDbg.git
+cd AgentDbg/agentdbg
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```

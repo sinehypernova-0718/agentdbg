@@ -37,6 +37,15 @@ You can control the UI via the URL (and the UI keeps these in sync when you chan
 - `http://127.0.0.1:8712/?run=abc12345` — open a specific run (prefix).
 - `http://127.0.0.1:8712/?poll_runs=5&poll_events=3` — poll run list every 5s, events every 3s.
 
+### Renaming and deleting runs
+
+The viewer supports renaming and deleting runs directly from the UI:
+
+- **Rename:** Click the rename button next to the run summary. Enter a new name; this updates `run_name` in the run's `run.json` file. The sidebar reflects the change on the next poll.
+- **Delete:** Click the delete button. After confirmation, the run directory and all its contents are permanently removed from disk. The sidebar switches to another run or shows "No runs yet."
+
+These operations use `POST /api/runs/{run_id}/rename` and `DELETE /api/runs/{run_id}` respectively. See [Architecture](architecture.md) for the full API surface.
+
 ### Live refresh
 
 - The **run list** is polled every few seconds (see `poll_runs`). New runs appear in the sidebar without a full page reload. Runs that no longer exist on disk (e.g. you deleted the run directory) are removed from the sidebar on the next poll; if the run you were viewing is removed, the UI switches to another run or shows “No runs yet.”

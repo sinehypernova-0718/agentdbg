@@ -57,6 +57,9 @@ The local server (FastAPI) exposes:
 | `GET /api/runs` | List recent runs (metadata only). |
 | `GET /api/runs/{run_id}` | Run metadata (run.json). |
 | `GET /api/runs/{run_id}/events` | Events array for the run. |
+| `GET /api/runs/{run_id}/paths` | Local filesystem paths for the run (run_dir, run_json, events_jsonl). |
+| `POST /api/runs/{run_id}/rename` | Rename a run (body: `{"run_name": "..."}`, updates run.json). |
+| `DELETE /api/runs/{run_id}` | Delete a run directory and its contents (returns 204). |
 | `GET /` | Static UI (`agentdbg/ui_static/index.html`). |
 
 Default bind: `127.0.0.1:8712`. The UI fetches runs and events from these endpoints and renders a timeline.
@@ -69,6 +72,55 @@ Default bind: `127.0.0.1:8712`. The UI fetches runs and events from these endpoi
 - Loads run list from `/api/runs`; when a run is selected (or `run_id` in query), loads `/api/runs/{run_id}/events`.
 - **Flat timeline:** events are shown in chronological order (write order / `ts`). Each event is expandable with payload shown as formatted JSON. Nesting by `parent_id` is not required.
 - `LOOP_WARNING` events are displayed prominently.
+
+---
+
+## Guardrails
+
+Guardrails are opt-in limits that stop a run before it burns more time, tokens, or tool calls than you intended. They are designed for local debugging, not policy enforcement.
+
+**Available guardrails:** `stop_on_loop`, `stop_on_loop_min_repetitions`, `max_llm_calls`, `max_tool_calls`, `max_events`, `max_duration_s`. All default to disabled.
+
+**Behavior when a guardrail triggers:**
+
+1. The triggering event is recorded using existing event types (no new types)
+2. `AgentDbgLoopAbort` or `AgentDbgGuardrailExceeded` is raised
+3. `ERROR` event is recorded (payload includes `guardrail`, `threshold`, `actual`)
+4. `RUN_END(status="error")` finalizes the run
+5. The exception propagates to the caller
+
+**Configuration precedence** (highest wins): function args (`@trace(...)`, `traced_run(...)`) > env vars > project YAML > user YAML > defaults.
+
+See [Guardrails](guardrails.md) for usage examples, [Configuration reference](reference/config.md) for all settings.
+
+---
+
+## Live-refresh viewer
+
+The UI supports automatic polling so you can start `agentdbg view` once and re-run your agent without manually refreshing.
+
+- **Run list sidebar:** polls `GET /api/runs` every 3 seconds (configurable via `poll_runs` URL param, 1–60s). New runs appear automatically; removed runs are cleared from the sidebar.
+- **Event timeline:** when the current run has `status: "running"`, events poll every 2 seconds (configurable via `poll_events` URL param, 1–60s). Polling stops when the run finishes.
+- **Visibility gating:** polling pauses when the browser tab is not visible (Page Visibility API) and resumes when you switch back.
+- **Visual indicator:** runs with `status: "running"` show a pulsing dot in the sidebar.
+
+---
+
+## Integration architecture
+
+AgentDbg adapters are thin translation layers that hook into a framework's callbacks and emit `record_llm_call` / `record_tool_call` events. They do not introduce new event types.
+
+| Integration | Module | Hook mechanism |
+|-------------|--------|----------------|
+| LangChain / LangGraph | `agentdbg.integrations.langchain` | Callback handler (`on_llm_start`/`on_tool_start`) |
+| OpenAI Agents SDK | `agentdbg.integrations.openai_agents` | Tracing processor (`GenerationSpanData`, `FunctionSpanData`, `HandoffSpanData`) |
+| CrewAI | `agentdbg.integrations.crewai` | Execution hooks (`before/after_llm_call`, `before/after_tool_call`) |
+
+**Integration lifecycle:** `agentdbg._integration_utils` provides `_invoke_run_enter` / `_invoke_run_exit` callbacks that adapters register with. This ensures adapters activate only when an explicit AgentDbg run is active.
+
+**Guardrails with integrations:** when a guardrail fires inside a framework callback, adapters raise `_AgentDbgAbortSignal` (a `BaseException` subclass) to bypass the framework's `except Exception` error handling and stop execution immediately.
+
+All integrations are optional dependencies; the core package does not depend on any framework. See [Integrations](integrations.md) for usage details.
 
 ---
 

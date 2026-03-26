@@ -113,6 +113,21 @@ See [Guardrails](guardrails.md) and the [configuration reference](reference/conf
 
 ---
 
+## `has_active_run`
+
+Returns `True` when an explicit traced run is active in the current context (i.e. inside a `@trace`-decorated function or a `traced_run` block).
+
+```python
+from agentdbg import has_active_run
+
+if has_active_run():
+    print("Inside a traced run")
+```
+
+Useful when integration code or utilities need to conditionally record events only when tracing is active, without creating an implicit run.
+
+---
+
 ## `record_llm_call`
 
 Record an LLM call event.
@@ -147,7 +162,7 @@ record_llm_call(
 | `temperature` | `float \| None` | `None` | Sampling temperature |
 | `stop_reason` | `str \| None` | `None` | Why the model stopped (`"stop"`, `"length"`, etc.) |
 | `status` | `str` | `"ok"` | `"ok"` or `"error"` |
-| `error` | `str \| Exception \| dict \| None` | `None` | Error details when `status="error"` |
+| `error` | `str \| BaseException \| dict \| None` | `None` | Error details when `status="error"` |
 
 Payload and meta are redacted and truncated according to config before storage.
 
@@ -179,7 +194,7 @@ record_tool_call(
 | `result` | `Any` | `None` | Tool return value |
 | `meta` | `dict \| None` | `None` | Freeform metadata |
 | `status` | `str` | `"ok"` | `"ok"` or `"error"` |
-| `error` | `str \| Exception \| dict \| None` | `None` | Error details when `status="error"` |
+| `error` | `str \| BaseException \| dict \| None` | `None` | Error details when `status="error"` |
 
 **Recording a failed tool call:**
 
