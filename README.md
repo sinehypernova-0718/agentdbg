@@ -2,6 +2,13 @@
 
 **The step-through debugger for AI agents.**
 
+![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/agent_dbg)
+[![PyPI version](https://img.shields.io/pypi/v/agentdbg.svg)](https://pypi.org/project/agentdbg/)
+![PyPI - Python Version](https://img.shields.io/pypi/pyversions/agentdbg)
+
+
+
+
 AgentDbg captures a structured trace of every agent run - LLM calls, tool calls, errors, state updates, loop warnings - and gives you a clean local timeline to see exactly what happened.
 
 Add `@trace`, run your agent, then run:
