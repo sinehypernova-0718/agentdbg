@@ -5,6 +5,7 @@
 ![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/agent_dbg)
 [![PyPI version](https://img.shields.io/pypi/v/agentdbg.svg)](https://pypi.org/project/agentdbg/)
 ![PyPI - Python Version](https://img.shields.io/pypi/pyversions/agentdbg)
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://codspeed.io/sinehypernova-0718/agentdbg?utm_source=badge)
 
 
 
