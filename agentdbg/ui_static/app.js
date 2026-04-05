@@ -305,16 +305,27 @@ function effectiveRunUiStatus(run) {
   return raw === 'ok' || raw === '' ? 'ok' : raw;
 }
 
+/** Sidebar meta line HTML: timestamp · status pill (colors match .event cards) · duration. */
+function formatRunItemMetaHtml(run) {
+  const parts = [];
+  if (run.started_at) parts.push(escapeHtml(run.started_at));
+  const uiStatus = effectiveRunUiStatus(run);
+  const known = { ok: true, warning: true, error: true, running: true };
+  const kind = known[uiStatus] ? uiStatus : 'ok';
+  const label = known[uiStatus] ? uiStatus : escapeHtml(uiStatus);
+  parts.push('<span class="run-item-status ' + kind + '">' + label + '</span>');
+  if (run.duration_ms != null) parts.push(escapeHtml(String(run.duration_ms) + ' ms'));
+  return parts.join(' · ');
+}
+
 /** Build one sidebar run item element (shared by loadRuns and mergeRunListIntoSidebar). */
 function buildRunItemEl(run) {
   const div = document.createElement('div');
   div.className = 'run-item' + (run.status === 'running' ? ' running' : '');
   div.dataset.runId = run.run_id;
   const name = run.run_name || run.run_id?.slice(0, 8) || '—';
-  const uiStatus = effectiveRunUiStatus(run);
-  const meta = [run.started_at || '', uiStatus || '', run.duration_ms != null ? run.duration_ms + ' ms' : ''].filter(Boolean).join(' · ');
   const nameHtml = run.status === 'running' ? '<span class="live-dot" aria-hidden="true"></span><span class="run-name">' + escapeHtml(name) + '</span>' : '<span class="run-name">' + escapeHtml(name) + '</span>';
-  div.innerHTML = nameHtml + '<br><span class="run-meta">' + escapeHtml(meta) + '</span>';
+  div.innerHTML = nameHtml + '<br><span class="run-meta">' + formatRunItemMetaHtml(run) + '</span>';
   div.addEventListener('click', () => selectRun(run.run_id));
   return div;
 }
@@ -693,13 +704,11 @@ function mergeRunListIntoSidebar(runs) {
     const run = runs[i];
     const existing = runListEl.querySelector('.run-item[data-run-id="' + run.run_id + '"]');
     const name = run.run_name || run.run_id?.slice(0, 8) || '—';
-    const uiStatus = effectiveRunUiStatus(run);
-    const meta = [run.started_at || '', uiStatus || '', run.duration_ms != null ? run.duration_ms + ' ms' : ''].filter(Boolean).join(' · ');
     if (existing) {
       const nameEl = existing.querySelector('.run-name');
       const metaEl = existing.querySelector('.run-meta');
       if (nameEl) nameEl.textContent = name;
-      if (metaEl) metaEl.textContent = meta;
+      if (metaEl) metaEl.innerHTML = formatRunItemMetaHtml(run);
       existing.classList.toggle('running', run.status === 'running');
       let dot = existing.querySelector('.live-dot');
       if (run.status === 'running') {

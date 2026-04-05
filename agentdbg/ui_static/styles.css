@@ -93,6 +93,33 @@ h1 { font-size: 1.25rem; margin: 0 0 1rem 0; color: var(--accent); }
 .run-item.selected { background: var(--border); border-color: var(--accent); }
 .run-item .run-name { font-weight: 600; }
 .run-item .run-meta { font-size: 0.75rem; color: var(--muted); }
+/* Status pill: same tokens as timeline .event / .event.loop-warning / .event.error */
+.run-item .run-meta .run-item-status {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.08rem 0.35rem;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  vertical-align: middle;
+}
+.run-item .run-meta .run-item-status.warning {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--text);
+}
+.run-item .run-meta .run-item-status.error {
+  background: var(--error-bg);
+  border-color: var(--error-border);
+  color: var(--text);
+}
+.run-item .run-meta .run-item-status.running {
+  background: rgba(77, 171, 247, 0.2);
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .run-item.running .live-dot {
   display: inline-block;
   width: 6px;
