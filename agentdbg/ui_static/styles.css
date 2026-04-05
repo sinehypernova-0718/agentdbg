@@ -11,6 +11,9 @@
   --error-border: #ff4444;
 }
 * { box-sizing: border-box; }
+html {
+  height: 100%;
+}
 body {
   font-family: ui-monospace, "Cascadia Code", "SF Mono", Monaco, monospace;
   font-size: 13px;
@@ -19,6 +22,11 @@ body {
   background: var(--bg);
   margin: 0;
   padding: 1rem;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 .page-header {
   display: flex;
@@ -27,6 +35,7 @@ body {
   gap: 1rem;
   margin-bottom: 1rem;
   flex-wrap: wrap;
+  flex-shrink: 0;
 }
 .page-header h1 { font-size: 1.25rem; margin: 0; color: var(--accent); }
 .header-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
@@ -50,7 +59,12 @@ body {
   background: var(--error-bg);
 }
 h1 { font-size: 1.25rem; margin: 0 0 1rem 0; color: var(--accent); }
-.layout { display: flex; gap: 1rem; min-height: 80vh; }
+.layout {
+  display: flex;
+  gap: 1rem;
+  flex: 1;
+  min-height: 0;
+}
 .sidebar {
   width: 280px;
   flex-shrink: 0;
@@ -58,7 +72,15 @@ h1 { font-size: 1.25rem; margin: 0 0 1rem 0; color: var(--accent); }
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.5rem;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+#run-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .sidebar h2 { font-size: 0.85rem; margin: 0 0 0.5rem 0; color: var(--muted); }
 .run-item {
@@ -91,6 +113,7 @@ h1 { font-size: 1.25rem; margin: 0 0 1rem 0; color: var(--accent); }
   flex-direction: column;
   gap: 1rem;
   min-width: 0;
+  min-height: 0;
 }
 /* Run Summary panel: status strip, KPI chips, callouts, quick filters (above timeline). */
 .run-summary {
@@ -203,7 +226,11 @@ h1 { font-size: 1.25rem; margin: 0 0 1rem 0; color: var(--accent); }
 }
 .filter-chip:hover { background: var(--border); }
 .filter-chip.active { border-color: var(--accent); background: rgba(77, 171, 247, 0.15); }
-.timeline { flex: 1; overflow: auto; }
+.timeline {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
 .event {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -261,7 +288,14 @@ h1 { font-size: 1.25rem; margin: 0 0 1rem 0; color: var(--accent); }
   animation: spin 0.7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-.sidebar-header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; }
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  flex-shrink: 0;
+}
 .sidebar-header h2 { margin: 0; }
 .btn-refresh {
   flex-shrink: 0;
