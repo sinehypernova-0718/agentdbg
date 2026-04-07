@@ -61,6 +61,13 @@ def _truncate_string(s: str, max_bytes: int) -> str:
     return b_trunc.decode(enc, errors="ignore") + TRUNCATED_MARKER
 
 
+def _scrub_secret_text(text: str) -> str:
+    """Scrub well-known token shapes from a plain string value."""
+    text = _OPENAI_KEY_RE.sub(REDACTED_MARKER, text)
+    text = _GITHUB_TOKEN_RE.sub(REDACTED_MARKER, text)
+    return _BEARER_RE.sub(r"\1" + REDACTED_MARKER, text)
+
+
 def _truncate_only(
     obj: Any,
     config: AgentDbgConfig,
@@ -76,12 +83,12 @@ def _truncate_only(
     if obj is None or isinstance(obj, (bool, int, float)):
         return obj
     if isinstance(obj, str):
-        return _truncate_string(obj, config.max_field_bytes)
+        return _truncate_string(_scrub_secret_text(obj), config.max_field_bytes)
     if isinstance(obj, dict):
         return {str(k): _truncate_only(v, config, depth + 1) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_truncate_only(item, config, depth + 1) for item in obj]
-    s = str(obj)
+    s = _scrub_secret_text(str(obj))
     return (
         _truncate_string(s, config.max_field_bytes)
         if len(s.encode("utf-8")) > config.max_field_bytes
@@ -105,7 +112,7 @@ def _redact_and_truncate(
     if obj is None or isinstance(obj, (bool, int, float)):
         return obj
     if isinstance(obj, str):
-        return _truncate_string(obj, config.max_field_bytes)
+        return _truncate_string(_scrub_secret_text(obj), config.max_field_bytes)
     if isinstance(obj, dict):
         out: dict[str, Any] = {}
         for k, v in obj.items():
@@ -117,7 +124,7 @@ def _redact_and_truncate(
         return out
     if isinstance(obj, (list, tuple)):
         return [_redact_and_truncate(item, config, depth + 1) for item in obj]
-    s = str(obj)
+    s = _scrub_secret_text(str(obj))
     return (
         _truncate_string(s, config.max_field_bytes)
         if len(s.encode("utf-8")) > config.max_field_bytes
@@ -218,9 +225,7 @@ def _build_error_payload(
 
 def _scrub_serialized_json_text(text: str) -> str:
     """Catch token shapes that slip through structured redaction."""
-    text = _OPENAI_KEY_RE.sub(REDACTED_MARKER, text)
-    text = _GITHUB_TOKEN_RE.sub(REDACTED_MARKER, text)
-    return _BEARER_RE.sub(r"\1" + REDACTED_MARKER, text)
+    return _scrub_secret_text(text)
 
 
 def _serialize_event_for_storage(event: dict[str, Any], config: AgentDbgConfig) -> str:
