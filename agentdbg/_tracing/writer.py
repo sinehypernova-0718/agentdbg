@@ -179,37 +179,50 @@ class EventQueueWorker(threading.Thread):
         """Consume queue items until shutdown is requested."""
         try:
             while True:
-                try:
-                    # Use a timeout so shutdown() can force-stop even if no sentinel
-                    # can be enqueued (queue full) or producers are stuck.
-                    first = self._queue.get(timeout=_FORCE_STOP_POLL_INTERVAL_S)
-                except queue.Empty:
-                    if self._force_stop.is_set():
-                        break
-                    continue
-                batch: list[object] = [first]
-                if first is not _SHUTDOWN_SIGNAL:
-                    # Drain greedily, but cap the size so a burst can't blow up memory.
-                    while len(batch) < MAX_BATCH_SIZE:
-                        try:
-                            nxt = self._queue.get_nowait()
-                        except queue.Empty:
-                            break
-                        batch.append(nxt)
-                        if nxt is _SHUTDOWN_SIGNAL:
-                            break
-
-                stop_requested = False
-                try:
-                    stop_requested = self._handle_batch(batch)
-                finally:
-                    for _ in batch:
-                        self._queue.task_done()
-
-                if stop_requested:
+                batch = self._wait_for_batch()
+                if batch is None:
+                    break
+                if self._process_batch(batch):
                     break
         finally:
             self._close_all_handles()
+
+    def _wait_for_batch(self) -> list[object] | None:
+        """Return the next drained batch, or None when forced shutdown wins."""
+        while True:
+            try:
+                # Use a timeout so shutdown() can force-stop even if no sentinel
+                # can be enqueued (queue full) or producers are stuck.
+                first = self._queue.get(timeout=_FORCE_STOP_POLL_INTERVAL_S)
+            except queue.Empty:
+                if self._force_stop.is_set():
+                    return None
+                continue
+            return self._drain_batch(first)
+
+    def _drain_batch(self, first: object) -> list[object]:
+        """Drain one greedy batch starting from an already-fetched queue item."""
+        batch: list[object] = [first]
+        if first is _SHUTDOWN_SIGNAL:
+            return batch
+        # Drain greedily, but cap the size so a burst can't blow up memory.
+        while len(batch) < MAX_BATCH_SIZE:
+            try:
+                nxt = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            batch.append(nxt)
+            if nxt is _SHUTDOWN_SIGNAL:
+                break
+        return batch
+
+    def _process_batch(self, batch: list[object]) -> bool:
+        """Handle one drained batch and always release its queue task slots."""
+        try:
+            return self._handle_batch(batch)
+        finally:
+            for _ in batch:
+                self._queue.task_done()
 
     def _put(self, item: object, *, allow_when_shutting_down: bool = False) -> None:
         self.ensure_healthy()
@@ -218,7 +231,9 @@ class EventQueueWorker(threading.Thread):
         try:
             self._queue.put(item, timeout=self._enqueue_timeout_s)
         except queue.Full as exc:
-            raise AgentDbgStorageError("event queue is full; refusing unbounded growth") from exc
+            raise AgentDbgStorageError(
+                "event queue is full; refusing unbounded growth"
+            ) from exc
 
     def _handle_batch(self, batch: list[object]) -> bool:
         """Process a FIFO batch of drained queue items. Returns True when a shutdown signal was encountered."""
@@ -245,7 +260,9 @@ class EventQueueWorker(threading.Thread):
                     events.append(nxt)
                     idx += 1
                 # fsync is expensive; only do it when we know the queue is drained.
-                pending_after = idx < len(batch) or self._has_pending_outside_batch(len(batch))
+                pending_after = idx < len(batch) or self._has_pending_outside_batch(
+                    len(batch)
+                )
                 self._handle_events(events, pending_after=pending_after)
                 continue
             if isinstance(item, BarrierItem):
@@ -263,7 +280,6 @@ class EventQueueWorker(threading.Thread):
             return
 
         head = items[0]
-        serialization_failure: tuple[EventItem, BaseException] | None = None
         wrote_any = False
         fsync_required = False
         try:
@@ -276,9 +292,7 @@ class EventQueueWorker(threading.Thread):
                     return
                 try:
                     serialized = _serialize_event_for_storage(item.event, item.config)
-                except Exception as exc:
-                    if serialization_failure is None:
-                        serialization_failure = (item, exc)
+                except Exception:
                     logger.exception(
                         "failed serializing event for run_id=%s path=%s",
                         item.run_id,
@@ -297,10 +311,6 @@ class EventQueueWorker(threading.Thread):
         except Exception as exc:
             self._record_fatal(exc, head.run_id, head.path)
             return
-
-        if serialization_failure is not None:
-            failed_item, exc = serialization_failure
-            self._record_fatal(exc, failed_item.run_id, failed_item.path)
 
     def _handle_barrier(self, item: BarrierItem) -> None:
         try:
@@ -388,7 +398,10 @@ class EventQueueWorker(threading.Thread):
 
     def _should_fsync(self, event: dict[str, Any], *, pending_after: bool) -> bool:
         event_type = str(event.get("event_type") or "")
-        return event_type in (EventType.ERROR.value, EventType.RUN_END.value) or not pending_after
+        return (
+            event_type in (EventType.ERROR.value, EventType.RUN_END.value)
+            or not pending_after
+        )
 
     def _fsync_handles(self, run_id: str | None) -> None:
         if run_id is None:
@@ -466,7 +479,10 @@ def _shutdown_registered_workers() -> None:
         try:
             worker.shutdown(timeout_s=DEFAULT_SHUTDOWN_TIMEOUT_S)
         except Exception:
-            logger.debug("failed to shut down storage worker during interpreter exit", exc_info=True)
+            logger.debug(
+                "failed to shut down storage worker during interpreter exit",
+                exc_info=True,
+            )
 
 
 atexit.register(_shutdown_registered_workers)

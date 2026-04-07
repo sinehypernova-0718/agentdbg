@@ -63,7 +63,9 @@ def test_ensure_handle_wraps_permission_error(temp_data_dir, monkeypatch):
 
     monkeypatch.setattr(builtins, "open", locked_open)
 
-    with pytest.raises(AgentDbgStorageError, match="permission denied opening events file"):
+    with pytest.raises(
+        AgentDbgStorageError, match="permission denied opening events file"
+    ):
         worker._ensure_handle(run_id, path)
 
 
@@ -126,10 +128,10 @@ def test_run_limits_greedy_batch_size(monkeypatch):
     assert batch_sizes == [3, 3]
 
 
-def test_handle_events_flushes_valid_items_before_serialization_fatal(
+def test_handle_events_skips_bad_serializations_without_disabling_worker(
     temp_data_dir, monkeypatch
 ):
-    """One bad event poisons the worker after earlier valid writes land on disk."""
+    """One bad event is skipped without disabling later writes for other events."""
     import agentdbg._tracing.writer as writer_mod
 
     config = load_config()
@@ -159,8 +161,7 @@ def test_handle_events_flushes_valid_items_before_serialization_fatal(
         pending_after=False,
     )
 
-    with pytest.raises(AgentDbgStorageError, match="background storage worker failed"):
-        worker.ensure_healthy()
+    worker.ensure_healthy()
 
     lines = path.read_text(encoding="utf-8").splitlines()
     assert [json.loads(line)["payload"]["tool_name"] for line in lines] == [
