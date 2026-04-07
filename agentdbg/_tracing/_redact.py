@@ -107,6 +107,26 @@ def _redact_and_truncate(
     We keep the traversal shallow enough to avoid runaway nesting and always
     build a fresh structure instead of mutating the input.
     """
+    if not config.redact:
+        if depth > _RECURSION_LIMIT:
+            return TRUNCATED_MARKER
+        if obj is None or isinstance(obj, (bool, int, float)):
+            return obj
+        if isinstance(obj, str):
+            return _truncate_string(obj, config.max_field_bytes)
+        if isinstance(obj, dict):
+            return {
+                str(k): _redact_and_truncate(v, config, depth + 1)
+                for k, v in obj.items()
+            }
+        if isinstance(obj, (list, tuple)):
+            return [_redact_and_truncate(item, config, depth + 1) for item in obj]
+        s = str(obj)
+        return (
+            _truncate_string(s, config.max_field_bytes)
+            if len(s.encode("utf-8")) > config.max_field_bytes
+            else s
+        )
     if depth > _RECURSION_LIMIT:
         return TRUNCATED_MARKER
     if obj is None or isinstance(obj, (bool, int, float)):
