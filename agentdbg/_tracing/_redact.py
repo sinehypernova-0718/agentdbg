@@ -3,6 +3,7 @@ Pure redaction and truncation utilities.
 Only depends on agentdbg.constants and agentdbg.config (for AgentDbgConfig type).
 """
 
+import json
 import re
 import traceback
 from typing import Any
@@ -22,6 +23,11 @@ def _key_matches_redact(key: str, redact_keys: list[str]) -> bool:
 
 # Matches --option=value or -o=value (option name can have letters, digits, hyphens, underscores).
 _ARGV_OPTION_VALUE = re.compile(r"^(-{1,2})([a-zA-Z0-9_-]+)=(.*)$")
+_OPENAI_KEY_RE = re.compile(r"\bsk-[A-Za-z0-9_-]{10,}\b")
+_GITHUB_TOKEN_RE = re.compile(
+    r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"
+)
+_BEARER_RE = re.compile(r"(?i)\b(bearer\s+)([A-Za-z0-9._~+/=-]{8,})")
 
 
 def _redact_argv(argv: list[str], config: AgentDbgConfig) -> list[str]:
@@ -57,6 +63,34 @@ def _truncate_string(s: str, max_bytes: int) -> str:
     limit = max(0, max_bytes - marker_bytes)
     b_trunc = b[:limit]
     return b_trunc.decode(enc, errors="ignore") + TRUNCATED_MARKER
+
+
+def _truncate_only(
+    obj: Any,
+    config: AgentDbgConfig,
+    depth: int = 0,
+) -> Any:
+    """
+    Recursively truncate large values without performing key-based redaction.
+
+    Used on the producer side to keep queued payloads bounded in size.
+    """
+    if depth > _RECURSION_LIMIT:
+        return TRUNCATED_MARKER
+    if obj is None or isinstance(obj, (bool, int, float)):
+        return obj
+    if isinstance(obj, str):
+        return _truncate_string(obj, config.max_field_bytes)
+    if isinstance(obj, dict):
+        return {str(k): _truncate_only(v, config, depth + 1) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_truncate_only(item, config, depth + 1) for item in obj]
+    s = str(obj)
+    return (
+        _truncate_string(s, config.max_field_bytes)
+        if len(s.encode("utf-8")) > config.max_field_bytes
+        else s
+    )
 
 
 def _redact_and_truncate(
@@ -123,10 +157,10 @@ def _normalize_usage(usage: Any) -> dict[str, int | None] | None:
 def _apply_redaction_truncation(
     payload: Any, meta: Any, config: AgentDbgConfig
 ) -> tuple[Any, Any]:
-    """Apply redaction and truncation to payload and meta; returns (payload, meta)."""
+    """Apply producer-side truncation to payload and meta; returns (payload, meta)."""
     return (
-        _redact_and_truncate(payload, config),
-        _redact_and_truncate(meta, config) if meta is not None else {},
+        _truncate_only(payload, config),
+        _truncate_only(meta, config) if meta is not None else {},
     )
 
 
@@ -139,7 +173,7 @@ def _build_error_payload(
     Build a consistent error object for TOOL_CALL/LLM_CALL payloads.
     Returns None if exc_or_message is None; otherwise dict with error_type, message, optional details, optional stack.
     Uses error_type (same as ERROR event payload per SPEC) for consumer consistency.
-    Result is redacted/truncated per config.
+    Result is truncated per config before being handed to the background writer.
     """
     if exc_or_message is None:
         return None
@@ -173,4 +207,26 @@ def _build_error_payload(
             "details": None,
             "stack": None,
         }
-    return _redact_and_truncate(err, config)
+    return _truncate_only(err, config)
+
+
+def _scrub_serialized_json_text(text: str) -> str:
+    """Redact known secret token shapes in serialized JSON text."""
+    text = _OPENAI_KEY_RE.sub(REDACTED_MARKER, text)
+    text = _GITHUB_TOKEN_RE.sub(REDACTED_MARKER, text)
+    return _BEARER_RE.sub(r"\1" + REDACTED_MARKER, text)
+
+
+def _serialize_event_for_storage(event: dict[str, Any], config: AgentDbgConfig) -> str:
+    """
+    Apply worker-side redaction and emit a compact JSON line safe for disk.
+
+    Known token regexes are scrubbed even when key-based redaction is disabled.
+    """
+    safe_event = (
+        _redact_and_truncate(event, config)
+        if config.redact
+        else _truncate_only(event, config)
+    )
+    line = json.dumps(safe_event, ensure_ascii=False, separators=(",", ":"))
+    return _scrub_serialized_json_text(line)
