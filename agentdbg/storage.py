@@ -453,6 +453,8 @@ def delete_run(run_id: str, config: AgentDbgConfig) -> None:
         close_run_handle(run_id, config)
     except Exception as e:
         logger.warning(
-            "delete_run: failed to close handle for run_id=%s: %s", run_id, e
+            "delete_run: failed to close handle for run_id=%s: %s",
+            run_id,
+            type(e).__name__,
         )
     shutil.rmtree(run_dir)

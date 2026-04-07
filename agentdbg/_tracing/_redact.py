@@ -183,18 +183,10 @@ def _apply_redaction_truncation(
     payload: Any, meta: Any, config: AgentDbgConfig
 ) -> tuple[Any, Any]:
     """Apply the producer-side redaction/truncation pass to payload and meta."""
-    return (
-        _redact_and_truncate(payload, config)
-        if config.redact
-        else _truncate_only(payload, config),
-        (
-            _redact_and_truncate(meta, config)
-            if config.redact
-            else _truncate_only(meta, config)
-        )
-        if meta is not None
-        else {},
-    )
+    transform = _redact_and_truncate if config.redact else _truncate_only
+    safe_payload = transform(payload, config)
+    safe_meta = transform(meta, config) if meta is not None else {}
+    return safe_payload, safe_meta
 
 
 def _build_error_payload(
