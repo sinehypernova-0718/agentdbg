@@ -13,6 +13,7 @@ from agentdbg.events import EventType, new_event
 from agentdbg.storage import (
     append_event,
     create_run,
+    delete_run,
     finalize_run,
     load_events,
     load_run_meta,
@@ -233,3 +234,21 @@ def test_load_events_logs_warning_for_corrupt_jsonl_lines(temp_data_dir):
     assert call2[0][1] == run_id
     assert call2[0][2] == 3
     assert isinstance(call2[0][3], json.JSONDecodeError)
+
+
+def test_delete_run_closes_open_event_handle_and_removes_dir(temp_data_dir):
+    """delete_run succeeds even when append_event has left the worker handle open."""
+    config = load_config()
+    meta = create_run("delete_open_handle", config)
+    run_id = meta["run_id"]
+    run_dir = meta["paths"]["run_dir"]
+    ev = new_event(
+        EventType.TOOL_CALL, run_id, "tool1", {"tool_name": "tool1", "args": {}}
+    )
+    append_event(run_id, ev, config)
+
+    delete_run(run_id, config)
+
+    from pathlib import Path
+
+    assert not Path(run_dir).exists()
