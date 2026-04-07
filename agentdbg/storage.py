@@ -7,6 +7,7 @@ Uses config.data_dir (default ~/.agentdbg). Stdlib only.
 
 import json
 import logging
+import time
 import os
 import shutil
 import tempfile
@@ -124,13 +125,15 @@ def close_run_handle(
     config: AgentDbgConfig,
     timeout_s: float = DEFAULT_BARRIER_TIMEOUT_S,
 ) -> None:
-    """Close a run's cached event file handle after pending writes complete."""
+    """Close a run's cached handle within a single shared timeout budget."""
     del config
     worker = _worker
     if worker is None:
         return
+    started = time.monotonic()
     worker.flush_run(run_id, timeout_s=timeout_s)
-    worker.close_run(run_id, timeout_s=timeout_s)
+    remaining = max(0.0, timeout_s - (time.monotonic() - started))
+    worker.close_run(run_id, timeout_s=remaining)
 
 
 def finalize_storage(timeout_s: float = DEFAULT_SHUTDOWN_TIMEOUT_S) -> None:
