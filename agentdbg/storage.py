@@ -131,9 +131,16 @@ def close_run_handle(
     if worker is None:
         return
     started = time.monotonic()
-    worker.flush_run(run_id, timeout_s=timeout_s)
-    remaining = max(0.0, timeout_s - (time.monotonic() - started))
-    worker.close_run(run_id, timeout_s=remaining)
+    flush_error: Exception | None = None
+    try:
+        worker.flush_run(run_id, timeout_s=timeout_s)
+    except Exception as exc:
+        flush_error = exc
+    finally:
+        remaining = max(0.0, timeout_s - (time.monotonic() - started))
+        worker.close_run(run_id, timeout_s=remaining)
+    if flush_error is not None:
+        raise flush_error
 
 
 def finalize_storage(timeout_s: float = DEFAULT_SHUTDOWN_TIMEOUT_S) -> None:
@@ -141,10 +148,12 @@ def finalize_storage(timeout_s: float = DEFAULT_SHUTDOWN_TIMEOUT_S) -> None:
     global _worker
     with _worker_lock:
         worker = _worker
-        _worker = None
     if worker is None:
         return
     worker.shutdown(timeout_s=timeout_s)
+    with _worker_lock:
+        if _worker is worker and not worker.is_alive():
+            _worker = None
 
 
 def create_run(run_name: str | None, config: AgentDbgConfig) -> dict:
