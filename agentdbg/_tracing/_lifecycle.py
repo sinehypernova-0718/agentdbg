@@ -16,7 +16,13 @@ from agentdbg.constants import default_counts
 from agentdbg.events import EventType, new_event
 from agentdbg.exceptions import AgentDbgGuardrailExceeded, _AgentDbgAbortSignal
 from agentdbg.guardrails import GuardrailParams, merge_guardrail_params
-from agentdbg.storage import append_event, create_run, finalize_run
+from agentdbg.storage import (
+    append_event,
+    close_run_handle,
+    create_run,
+    finalize_run,
+    flush_run,
+)
 
 from agentdbg._tracing._context import (
     _append_event_and_check_guardrails,
@@ -32,7 +38,7 @@ from agentdbg._tracing._context import (
     _run_start_payload_for_event,
     _started_at_var,
 )
-from agentdbg._tracing._redact import _redact_and_truncate
+from agentdbg._tracing._redact import _truncate_only
 from agentdbg._integration_utils import _invoke_run_enter, _invoke_run_exit
 
 
@@ -119,7 +125,9 @@ def _run_context(
         payload_end = _run_end_payload(status, counts, started_at)
         ev_end = new_event(EventType.RUN_END, run_id, "run_end", payload_end)
         append_event(run_id, ev_end, config)
+        flush_run(run_id, config)
         finalize_run(run_id, status, counts, config)
+        close_run_handle(run_id, config)
 
     try:
         payload = _run_start_payload_for_event(run_name, config)
@@ -130,7 +138,7 @@ def _run_context(
     except _AgentDbgAbortSignal as signal:
         exc_info = sys.exc_info()
         cause = signal.cause
-        err_payload = _redact_and_truncate(_guardrail_error_payload(cause), config)
+        err_payload = _truncate_only(_guardrail_error_payload(cause), config)
         err_ev = new_event(EventType.ERROR, run_id, type(cause).__name__, err_payload)
         append_event(run_id, err_ev, config)
         counts["errors"] = counts.get("errors", 0) + 1
@@ -138,7 +146,7 @@ def _run_context(
         raise cause from signal
     except AgentDbgGuardrailExceeded as e:
         exc_info = sys.exc_info()
-        err_payload = _redact_and_truncate(_guardrail_error_payload(e), config)
+        err_payload = _truncate_only(_guardrail_error_payload(e), config)
         err_ev = new_event(EventType.ERROR, run_id, type(e).__name__, err_payload)
         append_event(run_id, err_ev, config)
         counts["errors"] = counts.get("errors", 0) + 1
@@ -146,7 +154,7 @@ def _run_context(
         raise
     except Exception as e:
         exc_info = sys.exc_info()
-        err_payload = _redact_and_truncate(_error_payload(e), config)
+        err_payload = _truncate_only(_error_payload(e), config)
         err_ev = new_event(EventType.ERROR, run_id, type(e).__name__, err_payload)
         _append_event_and_check_guardrails(run_id, err_ev, config, counts)
         counts["errors"] = counts.get("errors", 0) + 1
