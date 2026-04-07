@@ -300,3 +300,49 @@ def test_argv_api_key_not_in_events_jsonl(temp_data_dir):
     assert secret not in raw_content, (
         f"API key value {secret!r} must not appear in events.jsonl"
     )
+
+
+def test_openai_key_in_url_scrubbed_even_when_key_redaction_disabled(
+    temp_data_dir, monkeypatch
+):
+    """Serialized-line scrubbing removes OpenAI-style keys embedded inside URLs."""
+    secret = "sk-proj-super-secret-token-1234567890"
+    monkeypatch.setenv("AGENTDBG_REDACT", "0")
+
+    @trace
+    def run_with_url_secret():
+        record_tool_call(
+            "http_call",
+            args={"url": f"https://api.example.com/v1?api_key={secret}"},
+            result=None,
+        )
+
+    run_with_url_secret()
+
+    config = load_config()
+    run_id = list_runs(limit=1, config=config)[0]["run_id"]
+    events_path = config.data_dir / "runs" / run_id / "events.jsonl"
+    raw_content = events_path.read_text(encoding="utf-8")
+    assert secret not in raw_content
+    assert REDACTED_MARKER in raw_content
+
+
+def test_bearer_token_scrubbed_even_when_key_redaction_disabled(
+    temp_data_dir, monkeypatch
+):
+    """Serialized-line scrubbing removes bearer tokens inside opaque strings."""
+    token = "Bearer abcdefghijklmnopqrstuvwxyz123456"
+    monkeypatch.setenv("AGENTDBG_REDACT", "0")
+
+    @trace
+    def run_with_bearer_secret():
+        record_tool_call("auth_call", args={"header": token}, result=None)
+
+    run_with_bearer_secret()
+
+    config = load_config()
+    run_id = list_runs(limit=1, config=config)[0]["run_id"]
+    events_path = config.data_dir / "runs" / run_id / "events.jsonl"
+    raw_content = events_path.read_text(encoding="utf-8")
+    assert token not in raw_content
+    assert f"Bearer {REDACTED_MARKER}" in raw_content

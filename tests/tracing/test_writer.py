@@ -15,8 +15,6 @@ from agentdbg.storage import create_run
 
 def test_worker_disables_future_io_after_fatal(temp_data_dir, monkeypatch):
     """A fatal write error disables the worker and blocks future I/O attempts."""
-    import agentdbg._tracing.writer as writer_mod
-
     config = load_config()
     meta = create_run("fatal-disable", config)
     run_id = meta["run_id"]
@@ -24,10 +22,10 @@ def test_worker_disables_future_io_after_fatal(temp_data_dir, monkeypatch):
     event = new_event(EventType.TOOL_CALL, run_id, "tool", {"tool_name": "tool"})
     worker = EventQueueWorker()
 
-    def boom(event_dict, event_config):
-        raise RuntimeError("boom")
+    def fail_fsync(_fd):
+        raise OSError("disk full")
 
-    monkeypatch.setattr(writer_mod, "_serialize_event_for_storage", boom)
+    monkeypatch.setattr("agentdbg._tracing.writer.os.fsync", fail_fsync)
     worker._handle_events(
         [EventItem(run_id=run_id, path=path, event=event, config=config)],
         pending_after=False,
