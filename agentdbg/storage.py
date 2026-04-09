@@ -132,15 +132,21 @@ def close_run_handle(
         return
     started = time.monotonic()
     flush_error: Exception | None = None
+    close_error: Exception | None = None
     try:
         worker.flush_run(run_id, timeout_s=timeout_s)
     except Exception as exc:
         flush_error = exc
     finally:
         remaining = max(0.0, timeout_s - (time.monotonic() - started))
-        worker.close_run(run_id, timeout_s=remaining)
+        try:
+            worker.close_run(run_id, timeout_s=remaining)
+        except Exception as exc:
+            close_error = exc
     if flush_error is not None:
         raise flush_error
+    if close_error is not None:
+        raise close_error
 
 
 def finalize_storage(timeout_s: float = DEFAULT_SHUTDOWN_TIMEOUT_S) -> None:
@@ -148,10 +154,9 @@ def finalize_storage(timeout_s: float = DEFAULT_SHUTDOWN_TIMEOUT_S) -> None:
     global _worker
     with _worker_lock:
         worker = _worker
-    if worker is None:
-        return
-    worker.shutdown(timeout_s=timeout_s)
-    with _worker_lock:
+        if worker is None:
+            return
+        worker.shutdown(timeout_s=timeout_s)
         if _worker is worker and not worker.is_alive():
             _worker = None
 

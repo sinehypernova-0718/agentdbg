@@ -4,6 +4,8 @@ Uses temp dir via AGENTDBG_DATA_DIR; env restored by fixture.
 """
 
 import json
+import threading
+import time
 from unittest.mock import patch
 
 import pytest
@@ -12,6 +14,7 @@ from agentdbg.config import load_config
 from agentdbg.events import EventType, new_event
 from agentdbg.storage import (
     append_event,
+    close_run_handle,
     create_run,
     delete_run,
     finalize_run,
@@ -60,6 +63,97 @@ def test_finalize_run_sets_status_ok_ended_at_duration_ms(temp_data_dir):
     assert run_meta.get("status") == "ok"
     assert run_meta.get("ended_at") is not None
     assert run_meta.get("duration_ms") is not None
+
+
+def test_close_run_handle_reraises_flush_error_when_close_also_fails(temp_data_dir):
+    """close_run_handle preserves the original flush error even if close_run also fails."""
+    config = load_config()
+    run_id = "2f4ce18a-b7d5-4b17-a42f-5d2c67c5d429"
+
+    class _FailingWorker:
+        def flush_run(self, run_id_arg, timeout_s):
+            raise RuntimeError("flush failed")
+
+        def close_run(self, run_id_arg, timeout_s):
+            raise RuntimeError("close failed")
+
+    with patch("agentdbg.storage._worker", _FailingWorker()):
+        with pytest.raises(RuntimeError, match="flush failed"):
+            close_run_handle(run_id, config)
+
+
+def test_close_run_handle_raises_close_error_when_flush_succeeds(temp_data_dir):
+    """close_run_handle still surfaces close_run failures when no flush error occurred."""
+    config = load_config()
+    run_id = "1b9117c2-cf14-42cd-a864-5dac23b868b7"
+
+    class _FailingWorker:
+        def flush_run(self, run_id_arg, timeout_s):
+            return None
+
+        def close_run(self, run_id_arg, timeout_s):
+            raise RuntimeError("close failed")
+
+    with patch("agentdbg.storage._worker", _FailingWorker()):
+        with pytest.raises(RuntimeError, match="close failed"):
+            close_run_handle(run_id, config)
+
+
+def test_finalize_storage_blocks_get_worker_until_shutdown_clears_singleton(
+    temp_data_dir,
+):
+    """append_event cannot observe a shutting-down singleton worker mid-finalize."""
+    from agentdbg.storage import _get_worker, append_event, finalize_storage
+
+    config = load_config()
+    meta = create_run("shutdown-race", config)
+    run_id = meta["run_id"]
+    event = new_event(
+        EventType.TOOL_CALL, run_id, "tool1", {"tool_name": "tool1", "args": {}}
+    )
+
+    worker = _get_worker()
+    original_shutdown = worker.shutdown
+    release_shutdown = threading.Event()
+    shutdown_started = threading.Event()
+    append_finished = threading.Event()
+    append_error: list[BaseException] = []
+
+    def blocking_shutdown(timeout_s=2.0):
+        shutdown_started.set()
+        release_shutdown.wait(1.0)
+        return original_shutdown(timeout_s=timeout_s)
+
+    with patch.object(worker, "shutdown", blocking_shutdown):
+        shutdown_thread = threading.Thread(target=finalize_storage, kwargs={"timeout_s": 1.0})
+        shutdown_thread.start()
+        assert shutdown_started.wait(1.0)
+
+        append_thread = threading.Thread(
+            target=lambda: _append_event_no_raise(
+                run_id, event, config, append_error, append_finished
+            )
+        )
+        append_thread.start()
+
+        time.sleep(0.05)
+        assert append_finished.is_set() is False
+
+        release_shutdown.set()
+        shutdown_thread.join(2.0)
+        append_thread.join(2.0)
+
+    assert append_error == []
+    assert append_finished.is_set() is True
+
+
+def _append_event_no_raise(run_id, event, config, append_error, append_finished):
+    try:
+        append_event(run_id, event, config)
+    except BaseException as exc:  # pragma: no cover - assertion inspects captured value
+        append_error.append(exc)
+    finally:
+        append_finished.set()
 
 
 # ---------------------------------------------------------------------------

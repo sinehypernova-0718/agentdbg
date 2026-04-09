@@ -190,9 +190,13 @@ def _finalize_implicit_run() -> None:
         append_event(run_id, ev, config)
         flush_run(run_id, config)
         finalize_run(run_id, "ok", counts, config)
-        close_run_handle(run_id, config)
     except Exception:
         pass
+    finally:
+        try:
+            close_run_handle(run_id, config)
+        except Exception:
+            pass
 
 
 def _shutdown_tracing() -> None:

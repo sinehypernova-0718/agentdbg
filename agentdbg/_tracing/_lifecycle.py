@@ -125,9 +125,11 @@ def _run_context(
         payload_end = _run_end_payload(status, counts, started_at)
         ev_end = new_event(EventType.RUN_END, run_id, "run_end", payload_end)
         append_event(run_id, ev_end, config)
-        flush_run(run_id, config)
-        finalize_run(run_id, status, counts, config)
-        close_run_handle(run_id, config)
+        try:
+            flush_run(run_id, config)
+            finalize_run(run_id, status, counts, config)
+        finally:
+            close_run_handle(run_id, config)
 
     try:
         payload = _run_start_payload_for_event(run_name, config)
