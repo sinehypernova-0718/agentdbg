@@ -1,6 +1,10 @@
 """AgentDbg: local-first agent debugging (trace, record_llm_call, record_tool_call, record_state)."""
 
-from agentdbg.exceptions import AgentDbgGuardrailExceeded, AgentDbgLoopAbort
+from agentdbg.exceptions import (
+    AgentDbgGuardrailExceeded,
+    AgentDbgLoopAbort,
+    AgentDbgStorageError,
+)
 from agentdbg.tracing import (
     has_active_run,
     record_llm_call,
@@ -19,6 +23,7 @@ except ImportError:
 __all__ = [
     "AgentDbgGuardrailExceeded",
     "AgentDbgLoopAbort",
+    "AgentDbgStorageError",
     "trace",
     "traced_run",
     "has_active_run",
