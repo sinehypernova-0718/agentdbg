@@ -22,12 +22,14 @@ def temp_data_dir():
         os.environ["AGENTDBG_DATA_DIR"] = str(tmp)
         yield tmp
     finally:
-        finalize_storage()
-        shutil.rmtree(tmp, ignore_errors=True)
-        if old is not None:
-            os.environ["AGENTDBG_DATA_DIR"] = old
-        elif "AGENTDBG_DATA_DIR" in os.environ:
-            os.environ.pop("AGENTDBG_DATA_DIR")
+        try:
+            finalize_storage()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+            if old is not None:
+                os.environ["AGENTDBG_DATA_DIR"] = old
+            elif "AGENTDBG_DATA_DIR" in os.environ:
+                os.environ.pop("AGENTDBG_DATA_DIR")
 
 
 def get_latest_run_id(config):

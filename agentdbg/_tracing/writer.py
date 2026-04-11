@@ -97,9 +97,11 @@ class EventQueueWorker(threading.Thread):
         """Start the worker thread on first use."""
         if self.is_alive():
             return
+        self.ensure_healthy()
         with self._start_lock:
             if self.is_alive():
                 return
+            self.ensure_healthy()
             if self._shutdown_requested.is_set():
                 raise AgentDbgStorageError("storage worker has already been shut down")
             self.start()
