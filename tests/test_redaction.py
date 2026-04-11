@@ -346,3 +346,30 @@ def test_bearer_token_scrubbed_even_when_key_redaction_disabled(
     raw_content = events_path.read_text(encoding="utf-8")
     assert token not in raw_content
     assert f"Bearer {REDACTED_MARKER}" in raw_content
+
+
+def test_direct_redact_and_truncate_scrubs_secret_text_when_redaction_disabled():
+    """Direct calls still scrub token-shaped strings when key redaction is off."""
+    cfg = AgentDbgConfig(
+        redact=False,
+        redact_keys=["api_key", "token"],
+        max_field_bytes=1000,
+        loop_window=12,
+        loop_repetitions=3,
+        data_dir=Path("."),
+        guardrails=GuardrailParams(),
+    )
+    payload = {
+        "api_key": "sk-proj-super-secret-token-1234567890",
+        "header": "Bearer abcdefghijklmnopqrstuvwxyz123456",
+        "api_key_note": "plain-secret-value",
+        "data": "hello",
+    }
+
+    out = _redact_and_truncate(payload, cfg)
+
+    # Token-pattern scrubbing stays on while key-based redaction stays off.
+    assert out["api_key"] == REDACTED_MARKER
+    assert out["header"] == f"Bearer {REDACTED_MARKER}"
+    assert out["api_key_note"] == "plain-secret-value"
+    assert out["data"] == "hello"

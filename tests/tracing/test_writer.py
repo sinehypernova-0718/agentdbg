@@ -99,6 +99,24 @@ def test_shutdown_forces_worker_exit_when_signal_enqueue_fails(monkeypatch):
     assert not worker.is_alive()
 
 
+def test_ensure_started_raises_storage_error_after_fatal_thread_exit(monkeypatch):
+    """Dead workers with fatal state surface the stored storage error."""
+    failure = OSError("disk full")
+
+    def fatal_run(self):
+        self._record_fatal(failure, "fatal-run", None)
+
+    monkeypatch.setattr(EventQueueWorker, "run", fatal_run)
+
+    worker = EventQueueWorker()
+    worker.ensure_started()
+    worker.join(1.0)
+
+    assert not worker.is_alive()
+    with pytest.raises(AgentDbgStorageError, match="background storage worker failed"):
+        worker.ensure_started()
+
+
 def test_run_limits_greedy_batch_size(monkeypatch):
     """The worker never drains more than MAX_BATCH_SIZE items per batch."""
     import agentdbg._tracing.writer as writer_mod

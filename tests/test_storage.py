@@ -103,7 +103,7 @@ def test_finalize_storage_blocks_get_worker_until_shutdown_clears_singleton(
     temp_data_dir,
 ):
     """append_event cannot observe a shutting-down singleton worker mid-finalize."""
-    from agentdbg.storage import _get_worker, append_event, finalize_storage
+    from agentdbg.storage import _get_worker, finalize_storage
 
     config = load_config()
     meta = create_run("shutdown-race", config)
