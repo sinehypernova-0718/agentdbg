@@ -1,8 +1,6 @@
-"""
-Pure redaction and truncation utilities.
-Only depends on agentdbg.constants and agentdbg.config (for AgentDbgConfig type).
-"""
+"""Helpers for truncating and redacting trace data before it hits disk."""
 
+import json
 import re
 import traceback
 from typing import Any
@@ -10,25 +8,29 @@ from typing import Any
 from agentdbg.config import AgentDbgConfig
 from agentdbg.constants import DEPTH_LIMIT, REDACTED_MARKER, TRUNCATED_MARKER
 
-# TODO: Remove the _RECURSION_LIMIT and use DEPTH_LIMIT instead
+# TODO: fold this back into DEPTH_LIMIT once the old name is no longer used.
 _RECURSION_LIMIT = DEPTH_LIMIT
 
 
 def _key_matches_redact(key: str, redact_keys: list[str]) -> bool:
-    """True if key matches any redact key (case-insensitive substring)."""
+    """Return True when the key looks sensitive enough to redact."""
     k = key.lower()
     return any(rk.lower() in k for rk in redact_keys)
 
 
-# Matches --option=value or -o=value (option name can have letters, digits, hyphens, underscores).
+# Matches `--option=value` or `-o=value`.
 _ARGV_OPTION_VALUE = re.compile(r"^(-{1,2})([a-zA-Z0-9_-]+)=(.*)$")
+_OPENAI_KEY_RE = re.compile(r"\bsk-[A-Za-z0-9_-]{10,}\b")
+_GITHUB_TOKEN_RE = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,})\b")
+_BEARER_RE = re.compile(r"(?i)\b(bearer\s+)([a-z0-9._~+/=-]{8,})")
 
 
 def _redact_argv(argv: list[str], config: AgentDbgConfig) -> list[str]:
     """
-    Redact only sensitive option values in argv. E.g. --api-key=sk-secret -> --api-key=__REDACTED__.
-    Option name is matched against config.redact_keys (with hyphens normalized to underscores).
-    Returns a new list; does not mutate input.
+    Redact sensitive CLI flag values like `--api-key=...`.
+
+    We only touch `key=value` style arguments here and leave positional args
+    alone. The original list is not mutated.
     """
     if not argv or not config.redact:
         return list(argv)
@@ -46,7 +48,7 @@ def _redact_argv(argv: list[str], config: AgentDbgConfig) -> list[str]:
 
 
 def _truncate_string(s: str, max_bytes: int) -> str:
-    """Truncate string so result (including TRUNCATED_MARKER) fits in max_bytes. O(n), single encode/decode."""
+    """Trim a string so the final UTF-8 payload still fits in `max_bytes`."""
     if max_bytes <= 0:
         return s
     enc = "utf-8"
@@ -59,21 +61,60 @@ def _truncate_string(s: str, max_bytes: int) -> str:
     return b_trunc.decode(enc, errors="ignore") + TRUNCATED_MARKER
 
 
-def _redact_and_truncate(
+def _scrub_secret_text(text: str) -> str:
+    """Scrub well-known token shapes from a plain string value."""
+    text = _OPENAI_KEY_RE.sub(REDACTED_MARKER, text)
+    text = _GITHUB_TOKEN_RE.sub(REDACTED_MARKER, text)
+    return _BEARER_RE.sub(r"\1" + REDACTED_MARKER, text)
+
+
+def _truncate_only(
     obj: Any,
     config: AgentDbgConfig,
     depth: int = 0,
 ) -> Any:
     """
-    Recursively redact keys matching config.redact_keys and truncate large strings.
-    Limit recursion to _RECURSION_LIMIT. Returns a new structure; does not mutate input.
+    Recursively trim values without doing any key-based redaction.
+
+    This runs on the producer side so queued payloads do not grow without bound.
     """
     if depth > _RECURSION_LIMIT:
         return TRUNCATED_MARKER
     if obj is None or isinstance(obj, (bool, int, float)):
         return obj
     if isinstance(obj, str):
-        return _truncate_string(obj, config.max_field_bytes)
+        return _truncate_string(_scrub_secret_text(obj), config.max_field_bytes)
+    if isinstance(obj, dict):
+        return {str(k): _truncate_only(v, config, depth + 1) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_truncate_only(item, config, depth + 1) for item in obj]
+    s = _scrub_secret_text(str(obj))
+    return (
+        _truncate_string(s, config.max_field_bytes)
+        if len(s.encode("utf-8")) > config.max_field_bytes
+        else s
+    )
+
+
+def _redact_and_truncate(
+    obj: Any,
+    config: AgentDbgConfig,
+    depth: int = 0,
+) -> Any:
+    """
+    Recursively redact sensitive keys and trim oversized string values.
+
+    We keep the traversal shallow enough to avoid runaway nesting and always
+    build a fresh structure instead of mutating the input.
+    """
+    if not config.redact:
+        return _truncate_only(obj, config, depth)
+    if depth > _RECURSION_LIMIT:
+        return TRUNCATED_MARKER
+    if obj is None or isinstance(obj, (bool, int, float)):
+        return obj
+    if isinstance(obj, str):
+        return _truncate_string(_scrub_secret_text(obj), config.max_field_bytes)
     if isinstance(obj, dict):
         out: dict[str, Any] = {}
         for k, v in obj.items():
@@ -85,7 +126,7 @@ def _redact_and_truncate(
         return out
     if isinstance(obj, (list, tuple)):
         return [_redact_and_truncate(item, config, depth + 1) for item in obj]
-    s = str(obj)
+    s = _scrub_secret_text(str(obj))
     return (
         _truncate_string(s, config.max_field_bytes)
         if len(s.encode("utf-8")) > config.max_field_bytes
@@ -94,7 +135,7 @@ def _redact_and_truncate(
 
 
 def _normalize_usage(usage: Any) -> dict[str, int | None] | None:
-    """Normalize LLM usage to shape: prompt_tokens, completion_tokens, total_tokens (null if unknown)."""
+    """Normalize usage data into the token fields we expose downstream."""
     if usage is None:
         return None
     if not isinstance(usage, dict):
@@ -123,11 +164,11 @@ def _normalize_usage(usage: Any) -> dict[str, int | None] | None:
 def _apply_redaction_truncation(
     payload: Any, meta: Any, config: AgentDbgConfig
 ) -> tuple[Any, Any]:
-    """Apply redaction and truncation to payload and meta; returns (payload, meta)."""
-    return (
-        _redact_and_truncate(payload, config),
-        _redact_and_truncate(meta, config) if meta is not None else {},
-    )
+    """Apply the producer-side redaction/truncation pass to payload and meta."""
+    transform = _redact_and_truncate if config.redact else _truncate_only
+    safe_payload = transform(payload, config)
+    safe_meta = transform(meta, config) if meta is not None else {}
+    return safe_payload, safe_meta
 
 
 def _build_error_payload(
@@ -136,10 +177,10 @@ def _build_error_payload(
     include_stack: bool = True,
 ) -> dict[str, Any] | None:
     """
-    Build a consistent error object for TOOL_CALL/LLM_CALL payloads.
-    Returns None if exc_or_message is None; otherwise dict with error_type, message, optional details, optional stack.
-    Uses error_type (same as ERROR event payload per SPEC) for consumer consistency.
-    Result is redacted/truncated per config.
+    Build a consistent error payload for tool and LLM events.
+
+    The shape matches the ERROR event payload closely so downstream consumers do
+    not have to special-case it.
     """
     if exc_or_message is None:
         return None
@@ -158,7 +199,7 @@ def _build_error_payload(
             "stack": None,
         }
     elif isinstance(exc_or_message, dict):
-        # Accept both error_type and type for backward compatibility when building from dict
+        # Older callers may still pass `type` instead of `error_type`.
         err = {
             "error_type": exc_or_message.get("error_type")
             or exc_or_message.get("type", "Error"),
@@ -173,4 +214,26 @@ def _build_error_payload(
             "details": None,
             "stack": None,
         }
-    return _redact_and_truncate(err, config)
+    return _truncate_only(err, config)
+
+
+def _scrub_serialized_json_text(text: str) -> str:
+    """Catch token shapes that slip through structured redaction."""
+    return _scrub_secret_text(text)
+
+
+def _serialize_event_for_storage(event: dict[str, Any], config: AgentDbgConfig) -> str:
+    """
+    Prepare one event for `events.jsonl`.
+
+    The worker does the deeper redaction pass right before writing so cached
+    queue items can stay lightweight, and then we do one last regex scrub on the
+    serialized JSON for token-looking strings.
+    """
+    safe_event = (
+        _redact_and_truncate(event, config)
+        if config.redact
+        else _truncate_only(event, config)
+    )
+    line = json.dumps(safe_event, ensure_ascii=False, separators=(",", ":"))
+    return _scrub_serialized_json_text(line)

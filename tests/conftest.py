@@ -3,23 +3,29 @@ Shared pytest fixtures and helpers for AgentDbg tests.
 """
 
 import os
-import tempfile
+import shutil
+import uuid
 from pathlib import Path
 
 import pytest
 
-from agentdbg.storage import list_runs
+from agentdbg.storage import finalize_storage, list_runs
 
 
 @pytest.fixture
 def temp_data_dir():
     """Create a temporary directory and set AGENTDBG_DATA_DIR to it for the test."""
-    with tempfile.TemporaryDirectory() as tmp:
-        old = os.environ.get("AGENTDBG_DATA_DIR")
+    tmp = Path.cwd() / f".tmp-agentdbg-{uuid.uuid4().hex}"
+    tmp.mkdir(parents=True, exist_ok=False)
+    old = os.environ.get("AGENTDBG_DATA_DIR")
+    try:
+        os.environ["AGENTDBG_DATA_DIR"] = str(tmp)
+        yield tmp
+    finally:
         try:
-            os.environ["AGENTDBG_DATA_DIR"] = tmp
-            yield Path(tmp)
+            finalize_storage()
         finally:
+            shutil.rmtree(tmp, ignore_errors=True)
             if old is not None:
                 os.environ["AGENTDBG_DATA_DIR"] = old
             elif "AGENTDBG_DATA_DIR" in os.environ:

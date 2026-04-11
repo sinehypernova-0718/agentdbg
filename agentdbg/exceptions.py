@@ -5,6 +5,13 @@ Raised when a run guardrail threshold is exceeded; lifecycle records ERROR + RUN
 and re-raises so the caller can handle the abort.
 """
 
+__all__ = [
+    "_AgentDbgAbortSignal",
+    "AgentDbgGuardrailExceeded",
+    "AgentDbgLoopAbort",
+    "AgentDbgStorageError",
+]
+
 
 class _AgentDbgAbortSignal(BaseException):
     """Internal BaseException used by integration handlers to bypass framework
@@ -64,3 +71,7 @@ class AgentDbgLoopAbort(AgentDbgGuardrailExceeded):
             actual=actual,
             message=message,
         )
+
+
+class AgentDbgStorageError(RuntimeError):
+    """Raised when the background storage worker cannot safely persist events."""
