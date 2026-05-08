@@ -7,9 +7,11 @@ Uses config.data_dir (default ~/.agentdbg). Stdlib only.
 
 import json
 import logging
+import time
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,11 +19,21 @@ from pathlib import Path
 from agentdbg.config import AgentDbgConfig
 from agentdbg.constants import SPEC_VERSION, default_counts
 from agentdbg.events import utc_now_iso_ms_z
+from agentdbg._tracing.writer import (
+    DEFAULT_BARRIER_TIMEOUT_S,
+    DEFAULT_SHUTDOWN_TIMEOUT_S,
+    EventItem,
+    EventQueueWorker,
+    event_path_for_run,
+)
 
 RUN_JSON = "run.json"
 EVENTS_JSONL = "events.jsonl"
 
 logger = logging.getLogger(__name__)
+
+_worker: EventQueueWorker | None = None
+_worker_lock = threading.Lock()
 
 # run_id MUST be UUIDv4. We enforce canonical form (lowercase with hyphens).
 _RUN_ID_MAX_LEN = 36
@@ -86,6 +98,69 @@ def _events_path(run_id: str, config: AgentDbgConfig) -> Path:
     return _run_dir(run_id, config) / EVENTS_JSONL
 
 
+def _get_worker() -> EventQueueWorker:
+    """Return the process-local event writer singleton, creating it on demand."""
+    global _worker
+    with _worker_lock:
+        if _worker is None:
+            _worker = EventQueueWorker()
+        return _worker
+
+
+def flush_run(
+    run_id: str | None,
+    config: AgentDbgConfig,
+    timeout_s: float = DEFAULT_BARRIER_TIMEOUT_S,
+) -> None:
+    """Block until queued writes for the given run are durable on disk."""
+    del config  # queue items already carry per-event config; flush is process-local
+    worker = _worker
+    if worker is None:
+        return
+    worker.flush_run(run_id, timeout_s=timeout_s)
+
+
+def close_run_handle(
+    run_id: str,
+    config: AgentDbgConfig,
+    timeout_s: float = DEFAULT_BARRIER_TIMEOUT_S,
+) -> None:
+    """Close a run's cached handle within a single shared timeout budget."""
+    del config
+    worker = _worker
+    if worker is None:
+        return
+    started = time.monotonic()
+    flush_error: Exception | None = None
+    close_error: Exception | None = None
+    try:
+        worker.flush_run(run_id, timeout_s=timeout_s)
+    except Exception as exc:
+        flush_error = exc
+    finally:
+        remaining = max(0.0, timeout_s - (time.monotonic() - started))
+        try:
+            worker.close_run(run_id, timeout_s=remaining)
+        except Exception as exc:
+            close_error = exc
+    if flush_error is not None:
+        raise flush_error
+    if close_error is not None:
+        raise close_error
+
+
+def finalize_storage(timeout_s: float = DEFAULT_SHUTDOWN_TIMEOUT_S) -> None:
+    """Drain the queue and stop the background writer."""
+    global _worker
+    with _worker_lock:
+        worker = _worker
+        if worker is None:
+            return
+        worker.shutdown(timeout_s=timeout_s)
+        if _worker is worker and not worker.is_alive():
+            _worker = None
+
+
 def create_run(run_name: str | None, config: AgentDbgConfig) -> dict:
     """
     Create a new run: generate run_id, create run dir, write initial run.json (status=running).
@@ -124,15 +199,16 @@ def create_run(run_name: str | None, config: AgentDbgConfig) -> dict:
 
 def append_event(run_id: str, event: dict, config: AgentDbgConfig) -> None:
     """
-    Append one event as a single JSON line to events.jsonl and flush.
+    Append one event to events.jsonl via the background worker.
 
     Does not create the run dir; call create_run first.
     """
-    path = _events_path(run_id, config)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(event, ensure_ascii=False) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
+    validate_run_id_format(run_id)
+    path = event_path_for_run(run_id, config)
+    worker = _get_worker()
+    worker.enqueue_event(
+        EventItem(run_id=run_id, path=path, event=event, config=config)
+    )
 
 
 def finalize_run(
@@ -315,6 +391,7 @@ def load_events(run_id: str, config: AgentDbgConfig) -> list[dict]:
 
     Returns [] if the file is missing or empty.
     """
+    flush_run(run_id, config)
     path = _events_path(run_id, config)
     if not path.is_file():
         return []
@@ -386,4 +463,12 @@ def delete_run(run_id: str, config: AgentDbgConfig) -> None:
     run_dir = _run_dir(run_id, config)
     if not run_dir.is_dir():
         raise FileNotFoundError(f"No run found for run_id '{run_id}'")
+    try:
+        close_run_handle(run_id, config)
+    except Exception as e:
+        logger.warning(
+            "delete_run: failed to close handle for run_id=%s: %s",
+            run_id,
+            type(e).__name__,
+        )
     shutil.rmtree(run_dir)

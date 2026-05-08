@@ -6,6 +6,7 @@ Depends: agentdbg.config, agentdbg.constants, agentdbg.events, agentdbg.guardrai
 import atexit
 import os
 import sys
+import threading
 from contextvars import ContextVar
 from datetime import datetime
 from typing import Any, Callable
@@ -14,9 +15,16 @@ from agentdbg.config import AgentDbgConfig, load_config
 from agentdbg.constants import default_counts
 from agentdbg.events import EventType, new_event, utc_now_iso_ms_z
 from agentdbg.guardrails import GuardrailParams, check_after_event
-from agentdbg.storage import append_event, create_run, finalize_run
+from agentdbg.storage import (
+    append_event,
+    close_run_handle,
+    create_run,
+    finalize_run,
+    finalize_storage,
+    flush_run,
+)
 
-from agentdbg._tracing._redact import _redact_and_truncate, _redact_argv
+from agentdbg._tracing._redact import _redact_argv, _truncate_only
 
 
 _run_id_var: ContextVar[str | None] = ContextVar("agentdbg_run_id", default=None)
@@ -45,6 +53,8 @@ _implicit_config: AgentDbgConfig | None = None
 _implicit_started_at: str | None = None
 _implicit_event_window: list[dict] = []
 _implicit_loop_emitted: set[str] = set()
+_shutdown_once = threading.Lock()
+_shutdown_complete = False
 
 
 def has_active_run() -> bool:
@@ -108,10 +118,10 @@ def _run_start_payload(run_name: str | None) -> dict[str, Any]:
 def _run_start_payload_for_event(
     run_name: str | None, config: AgentDbgConfig
 ) -> dict[str, Any]:
-    """Build RUN_START payload with argv values redacted per redact_keys, then apply full redaction/truncation."""
+    """Build RUN_START payload with argv values redacted, then truncate for the queue."""
     payload = _run_start_payload(run_name)
     payload["argv"] = _redact_argv(payload["argv"], config)
-    return _redact_and_truncate(payload, config)
+    return _truncate_only(payload, config)
 
 
 def _append_event_and_check_guardrails(
@@ -178,12 +188,34 @@ def _finalize_implicit_run() -> None:
         payload = _run_end_payload("ok", counts, started_at)
         ev = new_event(EventType.RUN_END, run_id, "run_end", payload)
         append_event(run_id, ev, config)
+        flush_run(run_id, config)
         finalize_run(run_id, "ok", counts, config)
     except Exception:
         pass
+    finally:
+        try:
+            close_run_handle(run_id, config)
+        except Exception:
+            pass
 
 
-atexit.register(_finalize_implicit_run)
+def _shutdown_tracing() -> None:
+    """Atexit coordinator: finalize implicit runs before stopping the worker."""
+    global _shutdown_complete
+    with _shutdown_once:
+        if _shutdown_complete:
+            return
+        _shutdown_complete = True
+        try:
+            _finalize_implicit_run()
+        finally:
+            try:
+                finalize_storage()
+            except Exception:
+                pass
+
+
+atexit.register(_shutdown_tracing)
 
 
 def _ensure_run() -> tuple[str, dict, AgentDbgConfig, list[dict], set[str]] | None:

@@ -300,3 +300,76 @@ def test_argv_api_key_not_in_events_jsonl(temp_data_dir):
     assert secret not in raw_content, (
         f"API key value {secret!r} must not appear in events.jsonl"
     )
+
+
+def test_openai_key_in_url_scrubbed_even_when_key_redaction_disabled(
+    temp_data_dir, monkeypatch
+):
+    """Serialized-line scrubbing removes OpenAI-style keys embedded inside URLs."""
+    secret = "sk-proj-super-secret-token-1234567890"
+    monkeypatch.setenv("AGENTDBG_REDACT", "0")
+
+    @trace
+    def run_with_url_secret():
+        record_tool_call(
+            "http_call",
+            args={"url": f"https://api.example.com/v1?api_key={secret}"},
+            result=None,
+        )
+
+    run_with_url_secret()
+
+    config = load_config()
+    run_id = list_runs(limit=1, config=config)[0]["run_id"]
+    events_path = config.data_dir / "runs" / run_id / "events.jsonl"
+    raw_content = events_path.read_text(encoding="utf-8")
+    assert secret not in raw_content
+    assert REDACTED_MARKER in raw_content
+
+
+def test_bearer_token_scrubbed_even_when_key_redaction_disabled(
+    temp_data_dir, monkeypatch
+):
+    """Serialized-line scrubbing removes bearer tokens inside opaque strings."""
+    token = "Bearer abcdefghijklmnopqrstuvwxyz123456"
+    monkeypatch.setenv("AGENTDBG_REDACT", "0")
+
+    @trace
+    def run_with_bearer_secret():
+        record_tool_call("auth_call", args={"header": token}, result=None)
+
+    run_with_bearer_secret()
+
+    config = load_config()
+    run_id = list_runs(limit=1, config=config)[0]["run_id"]
+    events_path = config.data_dir / "runs" / run_id / "events.jsonl"
+    raw_content = events_path.read_text(encoding="utf-8")
+    assert token not in raw_content
+    assert f"Bearer {REDACTED_MARKER}" in raw_content
+
+
+def test_direct_redact_and_truncate_scrubs_secret_text_when_redaction_disabled():
+    """Direct calls still scrub token-shaped strings when key redaction is off."""
+    cfg = AgentDbgConfig(
+        redact=False,
+        redact_keys=["api_key", "token"],
+        max_field_bytes=1000,
+        loop_window=12,
+        loop_repetitions=3,
+        data_dir=Path("."),
+        guardrails=GuardrailParams(),
+    )
+    payload = {
+        "api_key": "sk-proj-super-secret-token-1234567890",
+        "header": "Bearer abcdefghijklmnopqrstuvwxyz123456",
+        "api_key_note": "plain-secret-value",
+        "data": "hello",
+    }
+
+    out = _redact_and_truncate(payload, cfg)
+
+    # Token-pattern scrubbing stays on while key-based redaction stays off.
+    assert out["api_key"] == REDACTED_MARKER
+    assert out["header"] == f"Bearer {REDACTED_MARKER}"
+    assert out["api_key_note"] == "plain-secret-value"
+    assert out["data"] == "hello"
